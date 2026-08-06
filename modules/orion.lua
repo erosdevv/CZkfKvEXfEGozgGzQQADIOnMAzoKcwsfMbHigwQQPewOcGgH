@@ -408,6 +408,21 @@ function OrionLib:MakeNotification(NotificationConfig)
 		NotificationConfig.Image = NotificationConfig.Image or "rbxassetid://4384403532"
 		NotificationConfig.Time = NotificationConfig.Time or 15
 
+		local function canTween(object)
+			return typeof(object) == "Instance"
+				and object.Parent ~= nil
+				and object:IsDescendantOf(game)
+		end
+
+		local function safeTween(object, tweenInfo, props)
+			if not canTween(object) then
+				return
+			end
+			pcall(function()
+				TweenService:Create(object, tweenInfo, props):Play()
+			end)
+		end
+
 		local NotificationParent = SetProps(MakeElement("TFrame"), {
 			Size = UDim2.new(1, 0, 0, 0),
 			AutomaticSize = Enum.AutomaticSize.Y,
@@ -445,34 +460,50 @@ function OrionLib:MakeNotification(NotificationConfig)
 			})
 		})
 
-		TweenService:Create(NotificationFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Position = UDim2.new(0, 0, 0, 0)}):Play()
+		safeTween(NotificationFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Position = UDim2.new(0, 0, 0, 0)})
 
 		wait(math.max(0, NotificationConfig.Time - 0.88))
+		if not canTween(NotificationFrame) then
+			pcall(function()
+				NotificationParent:Destroy()
+			end)
+			return
+		end
+
 		local notificationIcon = NotificationFrame:FindFirstChild("Icon")
 		local notificationTitle = NotificationFrame:FindFirstChild("Title")
 		local notificationContent = NotificationFrame:FindFirstChild("Content")
 		local notificationStroke = NotificationFrame:FindFirstChildOfClass("UIStroke")
 		if notificationIcon then
-			TweenService:Create(notificationIcon, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {ImageTransparency = 1}):Play()
+			safeTween(notificationIcon, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {ImageTransparency = 1})
 		end
-		TweenService:Create(NotificationFrame, TweenInfo.new(0.8, Enum.EasingStyle.Quint), {BackgroundTransparency = 0.6}):Play()
+		safeTween(NotificationFrame, TweenInfo.new(0.8, Enum.EasingStyle.Quint), {BackgroundTransparency = 0.6})
 		wait(0.3)
 		if notificationStroke then
-			TweenService:Create(notificationStroke, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Transparency = 0.9}):Play()
+			safeTween(notificationStroke, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Transparency = 0.9})
 		end
 		if notificationTitle then
-			TweenService:Create(notificationTitle, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.4}):Play()
+			safeTween(notificationTitle, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.4})
 		end
 		if notificationContent then
-			TweenService:Create(notificationContent, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.5}):Play()
+			safeTween(notificationContent, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.5})
 		end
 		wait(0.05)
 
-		NotificationFrame:TweenPosition(UDim2.new(1, 20, 0, 0),'In','Quint',0.8,true)
-		wait(1.35)
-		NotificationFrame:Destroy()
+		if canTween(NotificationFrame) then
+			pcall(function()
+				NotificationFrame:TweenPosition(UDim2.new(1, 20, 0, 0), "In", "Quint", 0.8, true)
+			end)
+			wait(1.35)
+		end
+		pcall(function()
+			NotificationFrame:Destroy()
+		end)
+		pcall(function()
+			NotificationParent:Destroy()
+		end)
 	end)
-end    
+end
 
 function OrionLib:Init()
 	if OrionLib.SaveCfg then	
