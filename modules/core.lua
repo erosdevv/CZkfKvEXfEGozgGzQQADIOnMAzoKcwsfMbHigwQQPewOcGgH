@@ -843,8 +843,8 @@ end
 _G.F.setAutoFishingEnabled = function(value)
 	_G.autoFishingEnabled = value and true or false
 
-	if FishingAutomation then
-		FishingAutomation:setEnabled(_G.autoFishingEnabled)
+	if _G.FishingAutomation then
+		_G.FishingAutomation:setEnabled(_G.autoFishingEnabled)
 	end
 end
 
@@ -856,7 +856,7 @@ _G.F.safeSetParagraph = function(paragraph, text)
 	end)
 end
 
-FishingAutomation = (function()
+_G.FishingAutomation = (function()
 	local api = {}
 	local statusParagraph = nil
 	local lastCastAt = 0
@@ -1275,5 +1275,7 @@ FishingAutomation = (function()
 
 	return api
 end)()
+
+_G.FishingAutomation = _G.FishingAutomation
 
 return { name = "core" }

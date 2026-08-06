@@ -9,9 +9,16 @@ local REPO   = "https://raw.githubusercontent.com/erosdevv/LLSPLOIT/" .. BRANCH
 local function loadModule(name)
 	local url = REPO .. "/modules/" .. name .. ".lua"
 	local src = game:HttpGet(url)
+	if type(src) ~= "string" or src == "" or src:sub(1, 3) == "404" then
+		error("[LLSPLOIT] Failed to download '" .. name .. "' from " .. url)
+	end
 	local chunk, compileErr = loadstring(src)
 	if not chunk then
 		error("[LLSPLOIT] Compile error in '" .. name .. "': " .. tostring(compileErr))
+	end
+	-- Prefer shared _G so bare globals from each module are visible to the next.
+	if setfenv then
+		pcall(setfenv, chunk, getfenv and getfenv() or _G)
 	end
 	local ok, result = pcall(chunk)
 	if not ok then
@@ -32,7 +39,9 @@ loadModule("boot")
 loadModule("orion")
 
 print("[LLSPLOIT] Orion library ready")
-if type(__llsploitBootNotify) == "function" then
+if type(_G.__llsploitBootNotify) == "function" then
+	_G.__llsploitBootNotify("Orion ready, building UI...")
+elseif type(__llsploitBootNotify) == "function" then
 	__llsploitBootNotify("Orion ready, building UI...")
 end
 
@@ -52,7 +61,9 @@ end, debug.traceback)
 
 if not loadOk then
 	warn("[LLSPLOIT] Failed to load:\n" .. tostring(loadErr))
-	if type(__llsploitBootNotify) == "function" then
+	if type(_G.__llsploitBootNotify) == "function" then
+		_G.__llsploitBootNotify("Load failed - check console (F9)")
+	elseif type(__llsploitBootNotify) == "function" then
 		__llsploitBootNotify("Load failed - check console (F9)")
 	end
 	pcall(function()
@@ -62,6 +73,7 @@ if not loadOk then
 			Time = 8,
 		})
 	end)
+	return
 end
 
 _G.OrionLib:Init()

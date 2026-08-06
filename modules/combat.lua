@@ -1367,7 +1367,7 @@ _G.F.shouldSuppressBattleCameraIdle = function()
 
 	local staticActive = false
 	pcall(function()
-		staticActive = StaticAutomation and StaticAutomation:isAutomationActive() or false
+		staticActive = _G.StaticAutomation and _G.StaticAutomation:isAutomationActive() or false
 	end)
 
 	return staticActive
@@ -1416,6 +1416,10 @@ _G.F.installBattleCameraSafetyHooks = function()
 
 	_G.battleCameraHooked = true
 end
+
+task.defer(function()
+	_G.F.installBattleCameraSafetyHooks()
+end)
 
 _G.F.clearCurrentBattleReference = function(battle)
 	if type(_G._p) ~= "table" or type(battle) ~= "table" then

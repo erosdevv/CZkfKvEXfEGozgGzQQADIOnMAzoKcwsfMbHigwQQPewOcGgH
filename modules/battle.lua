@@ -37,7 +37,9 @@ _G.F.applyFastForwardFlagsToTable = function(object, enabled)
 end
 
 _G.F.setBattleFastForward = function(enabled, battle)
-	_G.F.installBattleCameraSafetyHooks()
+	if type(_G.F.installBattleCameraSafetyHooks) == "function" then
+		_G.F.installBattleCameraSafetyHooks()
+	end
 
 	battle = battle or _G.F.getCurrentBattle()
 
@@ -1162,9 +1164,8 @@ task.defer(function()
 	_G.F.installBattleGuiSafetyHooks()
 end)
 
-task.defer(function()
-	_G.F.installBattleCameraSafetyHooks()
-end)
+-- installBattleCameraSafetyHooks lives in combat.lua; that module schedules
+-- its own defer after the function is defined (HttpGet yields would race here).
 
 _G.F.findBattleRunButtonInGui = function()
 	local okPlayer, player = pcall(function()

@@ -1,6 +1,6 @@
 -- arcade.lua
 -- ArcadeAutomation (Disc Drop).
-ArcadeAutomation = (function()
+_G.ArcadeAutomation = (function()
 	local api = {}
 
 	local discDropStatusLabel = nil

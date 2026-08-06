@@ -3,9 +3,9 @@
 _G.F.setAutoDiscDropEnabled = function(value)
 	_G.autoDiscDropEnabled = value and true or false
 
-	if ArcadeAutomation then
+	if _G.ArcadeAutomation then
 		if not _G.autoDiscDropEnabled then
-			ArcadeAutomation:stopAll()
+			_G.ArcadeAutomation:stopAll()
 		end
 	end
 end
@@ -13,8 +13,8 @@ end
 _G.F.setAutoCatchEnabled = function(value)
 	_G.autoCatchEnabled = value
 
-	if value and CatchAutomation then
-		CatchAutomation:resetState()
+	if value and _G.CatchAutomation then
+		_G.CatchAutomation:resetState()
 	end
 end
 
@@ -1266,15 +1266,15 @@ _G.F.disableAllFeatures = function()
 	_G.noUnstuckCooldownEnabled = false
 	_G.naturalRunPausedSpecialBattle = nil
 	_G.encounterTargetStopBattle = nil
-	if StaticAutomation then
-		StaticAutomation:setEnabled(false)
+	if _G.StaticAutomation then
+		_G.StaticAutomation:setEnabled(false)
 	end
 	_G.arcerosAutoEnabled = false
-	if CatchAutomation then
-		CatchAutomation:resetState()
+	if _G.CatchAutomation then
+		_G.CatchAutomation:resetState()
 	end
-	if ArcadeAutomation then
-		ArcadeAutomation:stopAll()
+	if _G.ArcadeAutomation then
+		_G.ArcadeAutomation:stopAll()
 	end
 	if _G.savingDisabled then
 		_G.F.setSavingDisabled(false)
@@ -1583,7 +1583,7 @@ _G.F.collectConfigSnapshot = function()
 		profile = _G.configProfileName,
 		staticInteractTarget = _G.staticInteractTarget,
 		beastTarget = _G.F.getSelectedBeastName(),
-		autoStaticEnabled = _G.F.getToggleConfigValue(_G.configUi.autoStaticToggle, StaticAutomation and StaticAutomation:isEnabled() or false),
+		autoStaticEnabled = _G.F.getToggleConfigValue(_G.configUi.autoStaticToggle, _G.StaticAutomation and _G.StaticAutomation:isEnabled() or false),
 		autoArcerosEnabled = _G.F.getToggleConfigValue(_G.configUi.autoArcerosToggle, _G.arcerosAutoEnabled),
 		jackAutoBattleMove = _G.jackAutoBattle.Move,
 		jackAutoBattleTrainer = _G.jackAutoBattle.Trainer,
@@ -1638,8 +1638,8 @@ _G.F.applyConfigVariables = function(data)
 		return false, "Invalid config data."
 	end
 
-	if data.autoStaticEnabled ~= nil and StaticAutomation then
-		StaticAutomation:setEnabled(_G.F.configBool(data.autoStaticEnabled, false))
+	if data.autoStaticEnabled ~= nil and _G.StaticAutomation then
+		_G.StaticAutomation:setEnabled(_G.F.configBool(data.autoStaticEnabled, false))
 	end
 
 	if data.autoArcerosEnabled ~= nil then
@@ -1867,7 +1867,7 @@ _G.F.syncConfigUiFromVariables = function()
 	end
 
 	_G.applyingConfig = true
-	_G.F.setToggleUi(_G.configUi.autoStaticToggle, StaticAutomation:isEnabled())
+	_G.F.setToggleUi(_G.configUi.autoStaticToggle, _G.StaticAutomation:isEnabled())
 	if _G.configUi.autoArcerosToggle then
 		_G.F.setToggleUi(_G.configUi.autoArcerosToggle, _G.arcerosAutoEnabled)
 	end
@@ -1910,8 +1910,8 @@ _G.F.syncConfigUiFromVariables = function()
 	if _G.configUi.autoDiscDropToggle then
 		_G.F.setToggleUi(_G.configUi.autoDiscDropToggle, _G.autoDiscDropEnabled)
 	end
-	if ArcadeAutomation then
-		ArcadeAutomation:refreshStats()
+	if _G.ArcadeAutomation then
+		_G.ArcadeAutomation:refreshStats()
 	end
 	if _G.configUi.autoBoonaryToggle then
 		_G.F.setToggleUi(_G.configUi.autoBoonaryToggle, _G.autoBoonaryEnabled)

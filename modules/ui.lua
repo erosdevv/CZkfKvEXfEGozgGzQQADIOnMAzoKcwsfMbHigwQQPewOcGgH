@@ -160,10 +160,10 @@ _G.HuntsTab:AddSection({ Name = "Static Hunts" })
 
 _G.configUi.autoStaticToggle = _G.HuntsTab:AddToggle({
 	Name = "Auto Static",
-	Default = StaticAutomation:isEnabled(),
+	Default = _G.StaticAutomation:isEnabled(),
 	Color = Color3.fromRGB(80, 185, 255),
 	Callback = function(value)
-		StaticAutomation:setEnabled(value)
+		_G.StaticAutomation:setEnabled(value)
 		if value and _G.arcerosAutoEnabled and _G.configUi.autoArcerosToggle then
 			_G.arcerosAutoEnabled = false
 			pcall(function()
@@ -172,8 +172,8 @@ _G.configUi.autoStaticToggle = _G.HuntsTab:AddToggle({
 		end
 	end
 })
-StaticAutomation:attachToggle(_G.configUi.autoStaticToggle)
-StaticAutomation:attachStatsLabel(_G.HuntsTab:AddLabel("Soft Resets: 0"))
+_G.StaticAutomation:attachToggle(_G.configUi.autoStaticToggle)
+_G.StaticAutomation:attachStatsLabel(_G.HuntsTab:AddLabel("Soft Resets: 0"))
 
 _G.HuntsTab:AddTextbox({
 	Name = "Interact Target",
@@ -188,7 +188,7 @@ _G.HuntsTab:AddButton({
 	Name = "Interact Now",
 	Icon = "zap",
 	Callback = function()
-		local started, reason = StaticAutomation:startInteraction()
+		local started, reason = _G.StaticAutomation:startInteraction()
 		if not started and reason then
 			_G.OrionLib:MakeNotification({ Name = "Static", Content = reason, Time = 4 })
 		end
@@ -215,14 +215,14 @@ _G.configUi.autoArcerosToggle = _G.HuntsTab:AddToggle({
 	Callback = function(value)
 		_G.arcerosAutoEnabled = value and true or false
 		if value then
-			if StaticAutomation and StaticAutomation:isEnabled() and _G.configUi.autoStaticToggle then
-				StaticAutomation:setEnabled(false)
+			if _G.StaticAutomation and _G.StaticAutomation:isEnabled() and _G.configUi.autoStaticToggle then
+				_G.StaticAutomation:setEnabled(false)
 				pcall(function()
 					_G.configUi.autoStaticToggle:Set(false)
 				end)
 			end
-		elseif StaticAutomation and not StaticAutomation:isEnabled() then
-			StaticAutomation:setEnabled(false)
+		elseif _G.StaticAutomation and not _G.StaticAutomation:isEnabled() then
+			_G.StaticAutomation:setEnabled(false)
 		end
 	end
 })
@@ -233,7 +233,7 @@ _G.HuntsTab:AddButton({
 	Name = "Soft Reset Now",
 	Icon = "flame",
 	Callback = function()
-		local started, reason = StaticAutomation:startInteraction("arceros")
+		local started, reason = _G.StaticAutomation:startInteraction("arceros")
 		if not started and reason then
 			_G.OrionLib:MakeNotification({ Name = _G.F.getSelectedBeastName(), Content = reason, Time = 4 })
 		end
@@ -244,11 +244,11 @@ _G.HuntsTab:AddButton({
 	Name = "Walk to Soft Reset Trigger",
 	Icon = "footprints",
 	Callback = function()
-		if not StaticAutomation then
+		if not _G.StaticAutomation then
 			return
 		end
 
-		local walked, reason = StaticAutomation:walkToArcerosTrigger()
+		local walked, reason = _G.StaticAutomation:walkToArcerosTrigger()
 		if not walked and reason then
 			_G.OrionLib:MakeNotification({ Name = _G.F.getSelectedBeastName(), Content = reason, Time = 4 })
 		elseif not _G.F.getSelectedBeastTrigger() then
@@ -265,8 +265,8 @@ _G.HuntsTab:AddButton({
 	Name = "Reset Stats",
 	Icon = "rotate-ccw",
 	Callback = function()
-		if StaticAutomation then
-			StaticAutomation:resetStats()
+		if _G.StaticAutomation then
+			_G.StaticAutomation:resetStats()
 		end
 	end
 })
@@ -704,7 +704,7 @@ collectionUtilitySection:AddButton({
 
 
 _G.FishingTab:AddSection({ Name = "Auto Fishing" })
-FishingAutomation:attachUi(_G.FishingTab)
+_G.FishingAutomation:attachUi(_G.FishingTab)
 
 
 _G.FishingTab:AddSection({ Name = "Goppie Tracking" })
@@ -887,7 +887,7 @@ end)
 
 
 _G.MinigamesTab:AddSection({ Name = "Disc Drop" })
-ArcadeAutomation:attachUi(_G.MinigamesTab)
+_G.ArcadeAutomation:attachUi(_G.MinigamesTab)
 
 
 _G.MinigamesTab:AddSection({ Name = "Egg Rain" })
@@ -1166,7 +1166,7 @@ task.spawn(function()
 
 	while _G.uiAlive do
 		if _G.autoDiscDropEnabled then
-			local didWork, reason = ArcadeAutomation:runAutoDiscDrop()
+			local didWork, reason = _G.ArcadeAutomation:runAutoDiscDrop()
 
 			if not didWork and reason and os.clock() - lastNoticeAt >= 8 then
 				lastNoticeAt = os.clock()
@@ -1261,7 +1261,7 @@ task.spawn(function()
 	while _G.uiAlive do
 		local staticBusy = false
 		pcall(function()
-			staticBusy = StaticAutomation and StaticAutomation:isAutomationActive() or false
+			staticBusy = _G.StaticAutomation and _G.StaticAutomation:isAutomationActive() or false
 		end)
 
 		if _G.autoEggRainEnabled and not staticBusy then
@@ -1381,9 +1381,9 @@ end)
 
 task.spawn(function()
 	while _G.uiAlive do
-		if CatchAutomation and CatchAutomation:isEnabled() then
+		if _G.CatchAutomation and _G.CatchAutomation:isEnabled() then
 			pcall(function()
-				CatchAutomation:serviceBattle()
+				_G.CatchAutomation:serviceBattle()
 			end)
 			task.wait(0.06)
 		else
@@ -1394,9 +1394,9 @@ end)
 
 task.spawn(function()
 	while _G.uiAlive do
-		if CatchAutomation and CatchAutomation:isEnabled() then
+		if _G.CatchAutomation and _G.CatchAutomation:isEnabled() then
 			pcall(function()
-				CatchAutomation:serviceNicknamePrompt()
+				_G.CatchAutomation:serviceNicknamePrompt()
 			end)
 			task.wait(0.12)
 		else
@@ -1446,9 +1446,9 @@ _G.UserInputService.WindowFocused:Connect(function() _G.windowFocused = true end
 _G.UserInputService.WindowFocusReleased:Connect(function() _G.windowFocused = false end)
 task.spawn(function()
 	while _G.uiAlive do
-		if StaticAutomation and StaticAutomation:isAutomationActive() then
+		if _G.StaticAutomation and _G.StaticAutomation:isAutomationActive() then
 			pcall(function()
-				StaticAutomation:serviceBattle()
+				_G.StaticAutomation:serviceBattle()
 			end)
 			task.wait(0.06)
 		else
@@ -1469,10 +1469,10 @@ task.spawn(function()
 	}
 
 	while _G.uiAlive do
-		if StaticAutomation and StaticAutomation:isAutomationActive() then
+		if _G.StaticAutomation and _G.StaticAutomation:isAutomationActive() then
 			local didWork, reason
 			local ok, err = pcall(function()
-				didWork, reason = StaticAutomation:runCycle()
+				didWork, reason = _G.StaticAutomation:runCycle()
 			end)
 
 			if not ok then
@@ -1609,7 +1609,7 @@ do
 			_G.F.applyBattleAnimationFastForward(battle, false)
 		end
 
-		if _G.autoEncounterEnabled and not (CatchAutomation and CatchAutomation:shouldCatchBattle(battle)) then
+		if _G.autoEncounterEnabled and not (_G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle)) then
 			-- Auto Use Move + Auto Encounter: attack instead of running, so
 			-- encounters get KO'd for EXP rather than fled from.
 			if _G.autoMoveOneEnabled then
@@ -1650,7 +1650,7 @@ do
 					local now = os.clock()
 
 					if battle then
-						local catchManaged = CatchAutomation and CatchAutomation:shouldCatchBattle(battle)
+						local catchManaged = _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle)
 						if _G.F.isFishingGoppieBattle(battle)
 							and (_G.autoFishingEnabled or _G.fastForwardEnabled or (_G.autoCatchEnabled and catchManaged)) then
 							task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
@@ -1834,7 +1834,7 @@ do
 			_G.F.applyBattleAnimationFastForward(battle, false)
 		end
 
-		if CatchAutomation and CatchAutomation:shouldCatchBattle(battle) then
+		if _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle) then
 			return false
 		end
 
@@ -1873,7 +1873,7 @@ do
 				if type(_G._p) == "table" then
 					local battle = _G.F.getCurrentBattle()
 					local now = os.clock()
-					local catchManaged = CatchAutomation and CatchAutomation:shouldCatchBattle(battle)
+					local catchManaged = _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle)
 					local fishingBattle = battle and _G.F.isFishingGoppieBattle(battle)
 					local manageFishingBattle = fishingBattle
 						and (_G.autoFishingEnabled or _G.fastForwardEnabled or (_G.autoCatchEnabled and catchManaged))
@@ -1973,11 +1973,11 @@ task.spawn(function()
 	}
 
 	while _G.uiAlive do
-		if FishingAutomation and FishingAutomation:isEnabled() then
+		if _G.FishingAutomation and _G.FishingAutomation:isEnabled() then
 			local didWork, reason
 
 			local ok, err = pcall(function()
-				didWork, reason = FishingAutomation:runCycle()
+				didWork, reason = _G.FishingAutomation:runCycle()
 			end)
 
 			if not ok then
