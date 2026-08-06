@@ -10,11 +10,47 @@ local ArcadeAutomation = (function()
 	local arcadeRemoteKey = "W8iupZbUTwip9WF0zpAvmA"
 
 	local function setLabelText(label, text)
-		if label and type(label.Set) == "function" then
+		text = tostring(text or "")
+		if not label then
+			return
+		end
+		if type(label.Set) == "function" then
 			pcall(function()
-				label:Set(tostring(text or ""))
+				label:Set(text)
 			end)
 		end
+		-- Orion Label:Set can silently no-op on some executors; write Content too.
+		pcall(function()
+			if type(label.Content) == "userdata" or type(label.Content) == "table" then
+				label.Content.Text = text
+			end
+		end)
+	end
+
+	local function readDiscDropScore(grid)
+		if type(grid) ~= "table" then
+			return 0
+		end
+		local score = tonumber(rawget(grid, "score")) or tonumber(grid.score) or tonumber(grid.Score)
+		if score == nil and type(grid.GetScore) == "function" then
+			pcall(function()
+				score = tonumber(grid:GetScore())
+			end)
+		end
+		return math.floor(tonumber(score) or 0)
+	end
+
+	local function readDiscDropCombo(grid)
+		if type(grid) ~= "table" then
+			return 0
+		end
+		local combo = tonumber(rawget(grid, "combo")) or tonumber(grid.combo) or tonumber(grid.Combo)
+		if combo == nil and type(grid.GetCombo) == "function" then
+			pcall(function()
+				combo = tonumber(grid:GetCombo())
+			end)
+		end
+		return math.floor(tonumber(combo) or 0)
 	end
 
 	local function formatDiscDropNumber(value)
@@ -27,9 +63,81 @@ local ArcadeAutomation = (function()
 		return formatted
 	end
 
+	local function formatDiscDropTime(seconds)
+		seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+		local minutes = math.floor(seconds / 60)
+		local secs = seconds % 60
+		return string.format("%d:%02d", minutes, secs)
+	end
+
+	-- Parse "90", "1:30", or "1m30s" into seconds.
+	local function parseDiscDropTimeInput(value)
+		local text = string.lower(string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1"))
+		if text == "" then
+			return nil
+		end
+
+		local minutes, seconds = string.match(text, "^(%d+)%s*:%s*(%d+)$")
+		if minutes and seconds then
+			return (tonumber(minutes) * 60) + tonumber(seconds)
+		end
+
+		minutes, seconds = string.match(text, "^(%d+)%s*m%s*(%d+)%s*s?$")
+		if minutes and seconds then
+			return (tonumber(minutes) * 60) + tonumber(seconds)
+		end
+
+		minutes = string.match(text, "^(%d+)%s*m$")
+		if minutes then
+			return tonumber(minutes) * 60
+		end
+
+		seconds = string.match(text, "^(%d+)%s*s$")
+		if seconds then
+			return tonumber(seconds)
+		end
+
+		local asNumber = tonumber((text:gsub(",", "")))
+		if asNumber and asNumber >= 0 then
+			return math.floor(asNumber)
+		end
+
+		return nil
+	end
+
+	local function parseDiscDropScoreInput(value)
+		local text = string.gsub(tostring(value or ""), "[,%s]", "")
+		text = string.lower(string.gsub(text, "^%s*(.-)%s*$", "%1"))
+		if text == "" or text == "0" or text == "none" or text == "off" or text == "nil" then
+			return nil
+		end
+		local asNumber = tonumber(text)
+		if asNumber and asNumber > 0 then
+			return math.floor(asNumber)
+		end
+		return false
+	end
+
+	local function getDiscDropMaxScore()
+		local maxScore = tonumber(_G.discDropMaxScore)
+		if maxScore and maxScore > 0 then
+			return math.floor(maxScore)
+		end
+		return nil
+	end
+
+	local function getDiscDropFinishTime(startedAt)
+		local elapsed = math.max(0, math.floor(os.clock() - startedAt))
+		local forced = tonumber(_G.discDropForceFinishTime)
+		if forced and forced > 0 then
+			return math.max(elapsed, math.floor(forced))
+		end
+		return elapsed
+	end
+
 	local function refreshDiscDropRecordsLabel()
 		setLabelText(
-			discDropRecordsLabel,
+			discDropRecordsLabel or _G.discDropRecordsLabel,
 			string.format(
 				"Last score: %s | Best score: %s",
 				formatDiscDropNumber(_G.discDropLastScore),
@@ -39,29 +147,33 @@ local ArcadeAutomation = (function()
 	end
 
 	local function updateDiscDropUi(grid, movesMade, message)
-		local score = type(grid) == "table" and tonumber(grid.score) or 0
-		local combo = type(grid) == "table" and tonumber(grid.combo) or 0
+		local score = readDiscDropScore(grid)
+		local combo = readDiscDropCombo(grid)
+		local statusLabel = discDropStatusLabel or _G.discDropStatusLabel
+		local liveLabel = discDropLiveLabel or _G.discDropLiveLabel
 
-		setLabelText(discDropStatusLabel, tostring(message or "Idle"))
+		if message ~= nil then
+			setLabelText(statusLabel, tostring(message))
+		end
 		setLabelText(
-			discDropLiveLabel,
+			liveLabel,
 			string.format(
 				"Score: %s | Moves: %d | Combo: %d",
 				formatDiscDropNumber(score),
 				movesMade or 0,
-				combo or 0
+				combo
 			)
 		)
 		refreshDiscDropRecordsLabel()
 	end
 
 	local function setDiscDropStatus(text)
-		setLabelText(discDropStatusLabel, text)
+		setLabelText(discDropStatusLabel or _G.discDropStatusLabel, text)
 		refreshDiscDropRecordsLabel()
 	end
 
 	local function recordDiscDropGameScore(grid)
-		local finalScore = type(grid) == "table" and math.floor(tonumber(grid.score) or 0) or 0
+		local finalScore = readDiscDropScore(grid)
 		_G.discDropLastScore = finalScore
 
 		if finalScore > _G.discDropHighScore then
@@ -231,8 +343,8 @@ local ArcadeAutomation = (function()
 		end
 
 		local clone = setmetatable({}, getmetatable(grid))
-		clone.score = tonumber(grid.score) or 0
-		clone.combo = tonumber(grid.combo) or 1
+		clone.score = readDiscDropScore(grid)
+		clone.combo = math.max(1, readDiscDropCombo(grid))
 		clone.nextBombScore = tonumber(grid.nextBombScore) or 5000
 		clone.guiHandler = nil
 		clone.srand = Random.new(math.random(1, 1000000000))
@@ -261,7 +373,7 @@ local ArcadeAutomation = (function()
 			return -math.huge
 		end
 
-		local beforeScore = tonumber(clone.score) or 0
+		local beforeScore = readDiscDropScore(clone)
 		local ok, swapped = pcall(function()
 			return clone:TrySwap(move[1], move[2], move[3], move[4])
 		end)
@@ -270,9 +382,9 @@ local ArcadeAutomation = (function()
 			return -math.huge
 		end
 
-		local afterScore = tonumber(clone.score) or beforeScore
+		local afterScore = readDiscDropScore(clone)
 		local scoreGain = afterScore - beforeScore
-		local combo = tonumber(clone.combo) or 1
+		local combo = math.max(1, readDiscDropCombo(clone))
 		return scoreGain * 1000 + combo + math.random()
 	end
 
@@ -338,11 +450,22 @@ local ArcadeAutomation = (function()
 
 		local startedAt = os.clock()
 		local movesMade = 0
-		local lastScore = tonumber(grid.score) or 0
-		local lastMove = nil
-		renderDiscDropStatus(grid, movesMade, "Started")
+		local lastScore = readDiscDropScore(grid)
+		local maxScore = getDiscDropMaxScore()
+		local startMessage = maxScore
+			and string.format("Started (max %s)", formatDiscDropNumber(maxScore))
+			or "Started (no score cap)"
+		renderDiscDropStatus(grid, movesMade, startMessage)
 
 		while _G.autoDiscDropEnabled and _G.uiAlive do
+			local currentScoreCheck = readDiscDropScore(grid)
+			if currentScoreCheck < lastScore then
+				currentScoreCheck = lastScore
+			end
+			if maxScore and currentScoreCheck >= maxScore then
+				break
+			end
+
 			local move = chooseDiscDropMove(grid)
 			if not move then
 				break
@@ -364,20 +487,32 @@ local ArcadeAutomation = (function()
 			end
 
 			movesMade = movesMade + 1
-			lastMove = move
 
-			local currentScore = tonumber(grid.score) or lastScore
+			local currentScore = readDiscDropScore(grid)
 			if currentScore > lastScore then
 				lastScore = currentScore
 			end
 
+			if maxScore and currentScore >= maxScore then
+				renderDiscDropStatus(grid, movesMade, "Max score reached")
+				break
+			end
+
 			renderDiscDropStatus(grid, movesMade, "Playing")
-			task.wait(0.08)
 		end
 
 		recordDiscDropGameScore(grid)
-		networkPost("DiscDrop_Finish", math.floor(os.clock() - startedAt), true)
-		renderDiscDropStatus(grid, movesMade, movesMade > 0 and "Finished" or "No moves")
+		local finishTime = getDiscDropFinishTime(startedAt)
+		networkPost("DiscDrop_Finish", finishTime, true)
+		renderDiscDropStatus(
+			grid,
+			movesMade,
+			string.format(
+				"%s (time %s)",
+				movesMade > 0 and "Finished" or "No moves",
+				formatDiscDropTime(finishTime)
+			)
+		)
 		return movesMade > 0, movesMade > 0 and nil or "No Disc Drop moves were available."
 	end
 
@@ -421,6 +556,57 @@ local ArcadeAutomation = (function()
 			Color = Color3.fromRGB(90, 170, 255),
 			Callback = function(value)
 				_G.F.setAutoDiscDropEnabled(value)
+			end
+		})
+
+		local maxScoreDefault = getDiscDropMaxScore()
+		_G.configUi.discDropMaxScoreBox = tab:AddTextbox({
+			Name = "Max Score (blank = no cap)",
+			Default = maxScoreDefault and tostring(maxScoreDefault) or "",
+			TextDisappear = false,
+			Callback = function(value)
+				local parsed = parseDiscDropScoreInput(value)
+				if parsed == false then
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Disc Drop",
+						Content = "Max score must be a positive number (or blank for no cap).",
+						Time = 4,
+					})
+					return
+				end
+				_G.discDropMaxScore = parsed
+				local message = parsed
+					and ("Max score set to " .. formatDiscDropNumber(parsed))
+					or "Max score cleared (play until no moves)."
+				setDiscDropStatus(message)
+			end
+		})
+
+		local finishDefault = tonumber(_G.discDropForceFinishTime)
+		_G.configUi.discDropFinishTimeBox = tab:AddTextbox({
+			Name = "Finish Time (seconds or m:ss)",
+			Default = finishDefault and tostring(finishDefault) or "1",
+			TextDisappear = false,
+			Callback = function(value)
+				local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+				if text == "" or string.lower(text) == "off" or string.lower(text) == "none" then
+					_G.discDropForceFinishTime = nil
+					setDiscDropStatus("Finish time cleared (use real elapsed).")
+					return
+				end
+
+				local parsed = parseDiscDropTimeInput(value)
+				if not parsed or parsed < 0 then
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Disc Drop",
+						Content = "Finish time must be seconds (90) or m:ss (1:30).",
+						Time = 4,
+					})
+					return
+				end
+
+				_G.discDropForceFinishTime = parsed
+				setDiscDropStatus("Finish time set to " .. formatDiscDropTime(parsed) .. ".")
 			end
 		})
 

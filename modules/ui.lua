@@ -704,7 +704,13 @@ collectionUtilitySection:AddButton({
 
 
 _G.FishingTab:AddSection({ Name = "Auto Fishing" })
-_G.FishingAutomation:attachUi(_G.FishingTab)
+do
+	local fishing = _G.FishingAutomation or (getgenv and getgenv().FishingAutomation)
+	if not fishing then
+		error("[LLSPLOIT] FishingAutomation was not exported by modules/core.lua")
+	end
+	fishing:attachUi(_G.FishingTab)
+end
 
 
 _G.FishingTab:AddSection({ Name = "Goppie Tracking" })
@@ -887,7 +893,13 @@ end)
 
 
 _G.MinigamesTab:AddSection({ Name = "Disc Drop" })
-_G.ArcadeAutomation:attachUi(_G.MinigamesTab)
+do
+	local arcade = _G.ArcadeAutomation or (getgenv and getgenv().ArcadeAutomation)
+	if not arcade then
+		error("[LLSPLOIT] ArcadeAutomation was not exported by modules/arcade.lua")
+	end
+	arcade:attachUi(_G.MinigamesTab)
+end
 
 
 _G.MinigamesTab:AddSection({ Name = "Egg Rain" })

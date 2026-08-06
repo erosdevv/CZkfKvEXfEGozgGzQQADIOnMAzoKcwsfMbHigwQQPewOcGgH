@@ -366,6 +366,8 @@ _G.discDropLiveLabel = nil
 _G.discDropRecordsLabel = nil
 _G.discDropLastScore = 0
 _G.discDropHighScore = 0
+_G.discDropMaxScore = nil
+_G.discDropForceFinishTime = 1
 
 -- Information / Tix Boonary automation
 _G.autoBoonaryEnabled = false
