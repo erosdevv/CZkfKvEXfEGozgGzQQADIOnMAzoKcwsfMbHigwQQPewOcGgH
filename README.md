@@ -3,7 +3,7 @@
 Load in your executor with:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/main/main.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua"))()
 ```
 
 `main.lua` fetches each file under `modules/` via `HttpGet` + `loadstring`, in order:
@@ -27,5 +27,5 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/mai
 Compatibility alias:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/main/LLSPLOIT.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/LLSPLOIT.lua"))()
 ```

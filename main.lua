@@ -1,10 +1,10 @@
 -- main.lua
 -- Entry point for LLSPLOIT.
 -- Paste this entire file into your executor, or loadstring it from the raw GitHub URL:
---   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/main/main.lua"))()
+--   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua"))()
 
 local BRANCH = "main"
-local REPO   = "https://raw.githubusercontent.com/erosdevv/LLSPLOIT/" .. BRANCH
+local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 
 local MODULES = {

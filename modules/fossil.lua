@@ -1766,6 +1766,30 @@ _G.F.applyConfigVariables = function(data)
 		end
 	end
 
+	if data.discDropMaxScore ~= nil then
+		if data.discDropMaxScore == false or data.discDropMaxScore == "" then
+			_G.discDropMaxScore = nil
+		else
+			local parsed = tonumber(data.discDropMaxScore)
+			if parsed and parsed > 0 then
+				_G.discDropMaxScore = math.floor(parsed)
+			elseif parsed == 0 then
+				_G.discDropMaxScore = nil
+			end
+		end
+	end
+
+	if data.discDropForceFinishTime ~= nil then
+		if data.discDropForceFinishTime == false or data.discDropForceFinishTime == "" then
+			_G.discDropForceFinishTime = nil
+		else
+			local parsed = tonumber(data.discDropForceFinishTime)
+			if parsed and parsed >= 0 then
+				_G.discDropForceFinishTime = math.floor(parsed)
+			end
+		end
+	end
+
 	if data.autoBoonaryEnabled ~= nil then
 		_G.F.setAutoBoonaryEnabled(_G.F.configBool(data.autoBoonaryEnabled, false))
 	end
@@ -1911,6 +1935,18 @@ _G.F.syncConfigUiFromVariables = function()
 	_G.F.syncFossilTargetDropdown(_G.autoFossilReviveTarget)
 	if _G.configUi.autoDiscDropToggle then
 		_G.F.setToggleUi(_G.configUi.autoDiscDropToggle, _G.autoDiscDropEnabled)
+	end
+	if _G.configUi.discDropMaxScoreBox and type(_G.configUi.discDropMaxScoreBox.Set) == "function" then
+		pcall(function()
+			_G.configUi.discDropMaxScoreBox:Set(_G.discDropMaxScore and tostring(_G.discDropMaxScore) or "")
+		end)
+	end
+	if _G.configUi.discDropFinishTimeBox and type(_G.configUi.discDropFinishTimeBox.Set) == "function" then
+		pcall(function()
+			_G.configUi.discDropFinishTimeBox:Set(
+				_G.discDropForceFinishTime ~= nil and tostring(_G.discDropForceFinishTime) or ""
+			)
+		end)
 	end
 	if _G.ArcadeAutomation then
 		_G.ArcadeAutomation:refreshStats()
