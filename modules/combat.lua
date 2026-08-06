@@ -554,19 +554,8 @@ _G.F.jackScanTrainerNpcs = function()
 		return
 	end
 
-	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
-	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
-		return
-	end
-
-	local ok, npcs = pcall(function()
-		return collectionManager:GetNPCs()
-	end)
-	if not ok or type(npcs) ~= "table" then
-		return
-	end
-
-	-- MrJack builds Names from chunk.battles and prunes stale dropdown entries.
+	-- Prune against current chunk.battles before GetNPCs so a failed NPC scan
+	-- cannot leave previous-chunk trainer names in the dropdown.
 	local battleNames = {}
 	for _, battleData in pairs(battles) do
 		if type(battleData) == "table" then
@@ -584,6 +573,24 @@ _G.F.jackScanTrainerNpcs = function()
 			_G.jackTrainerConfigs[name] = nil
 			_G.jackTrainerBattleKeys[name] = nil
 		end
+	end
+
+	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
+	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
+		table.sort(_G.jackTrainerList, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		return
+	end
+
+	local ok, npcs = pcall(function()
+		return collectionManager:GetNPCs()
+	end)
+	if not ok or type(npcs) ~= "table" then
+		table.sort(_G.jackTrainerList, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		return
 	end
 
 	-- MrJack ForLooP iterates the full GetNPCs map (not ipairs-only).
@@ -1529,8 +1536,6 @@ _G.F.processJackNpcChatSay = function(args)
 				elseif lowerPrefix9 == "[gamepad]" then
 					s = string.sub(s, 10)
 					changed = true
-				else
-					changed = true
 				end
 				out[i] = s
 			else
@@ -1627,6 +1632,9 @@ _G.F.jackInstallSwitchMonsterBusyHook = function()
 		if results[1] then
 			return unpack(results, 2)
 		end
+
+		-- Propagate real switchMonster failures so callers don't treat them as success.
+		error(results[2], 0)
 	end
 
 	battleGui.__jackSwitchMonsterHooked = true
