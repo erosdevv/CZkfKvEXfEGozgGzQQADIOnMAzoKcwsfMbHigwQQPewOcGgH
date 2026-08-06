@@ -376,6 +376,10 @@ _G.F.jackHasBattleGuiInstance = function()
 end
 
 _G.F.jackCanStartTrainerBattle = function()
+	if _G.jackOutdoorHealRunning then
+		return false
+	end
+
 	if _G.autoHealEnabled then
 		if _G.F.isPartyFullHealth() then
 			return true
@@ -384,6 +388,32 @@ _G.F.jackCanStartTrainerBattle = function()
 	end
 
 	return true
+end
+
+_G.F.jackEnterGameContext = function()
+	if type(setthreadcontext) == "function" then
+		pcall(setthreadcontext, 2)
+	elseif type(syn) == "table" and type(syn.set_thread_identity) == "function" then
+		pcall(syn.set_thread_identity, 2)
+	end
+end
+
+_G.jackMoveBusy = _G.jackMoveBusy or false
+_G.jackMoveBusyToken = _G.jackMoveBusyToken or 0
+
+_G.F.jackMarkMoveBusy = function(duration)
+	_G.jackMoveBusy = true
+	_G.jackMoveBusyToken = (_G.jackMoveBusyToken or 0) + 1
+	local token = _G.jackMoveBusyToken
+	task.delay(tonumber(duration) or 0.35, function()
+		if _G.jackMoveBusyToken == token then
+			_G.jackMoveBusy = false
+		end
+	end)
+end
+
+_G.F.jackIsMoveBusy = function()
+	return _G.jackMoveBusy == true or _G.jackOutdoorHealRunning == true
 end
 
 _G.F.setDropdownUiValue = function(dropdown, value)
@@ -432,8 +462,21 @@ _G.F.jackSyncTrainerDropdown = function(forceValue)
 	end
 end
 
+_G.F.jackIsNpcModel = function(model)
+	if model == nil then
+		return false
+	end
+	local modelType = type(model)
+	if modelType == "userdata" then
+		return true
+	end
+	-- Some executors report Instances via typeof only.
+	local ok, kind = pcall(typeof, model)
+	return ok and kind == "Instance"
+end
+
 _G.F.jackProcessTrainerNpc = function(npc)
-	if type(npc) ~= "table" or type(npc.model) ~= "userdata" then
+	if type(npc) ~= "table" or not _G.F.jackIsNpcModel(npc.model) then
 		return
 	end
 
@@ -448,17 +491,30 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		return
 	end
 
+	-- MrJack: read #Battle.Value as-is (no tonumber), fallback "Mrjack".
 	local battleId = nil
-	local battleValue = npc.model:FindFirstChild("#Battle")
-	if battleValue then
-		battleId = tonumber(battleValue.Value)
+	local okBattle, battleValue = pcall(function()
+		return npc.model:FindFirstChild("#Battle")
+	end)
+	if okBattle and battleValue then
+		local okValue, value = pcall(function()
+			return battleValue.Value
+		end)
+		if okValue and value ~= nil and value ~= "" then
+			battleId = value
+		end
 	end
-	if not battleId then
+	if battleId == nil then
 		battleId = "Mrjack"
 	end
 
 	local trainerData = battles[tostring(battleId)] or battles[battleId]
 	if type(trainerData) ~= "table" then
+		return
+	end
+
+	-- MrJack hard-requires RematchQuestion before mapping/list insert.
+	if not trainerData.RematchQuestion then
 		return
 	end
 
@@ -474,17 +530,27 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		battleKey = tostring(battleId),
 	}
 
+	-- MrJack insert gate: UV5 is Battle.setupScene (always truthy), so list
+	-- insert effectively requires regionData.BattleScene.
 	local regionData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "regionData") or nil
-	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene ~= nil
-	if hasBattleScene or trainerData.RematchQuestion then
-		if not table.find(_G.jackTrainerList, trainerName) then
-			table.insert(_G.jackTrainerList, trainerName)
-		end
+	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene and true or false
+	if hasBattleScene and not table.find(_G.jackTrainerList, trainerName) then
+		table.insert(_G.jackTrainerList, trainerName)
 	end
 end
 
 _G.F.jackScanTrainerNpcs = function()
 	if not _G.F.ensureP() then
+		return
+	end
+
+	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
+	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	if type(battles) ~= "table" or next(battles) == nil then
+		_G.jackTrainerList = {}
+		_G.jackTrainerConfigs = {}
+		_G.jackTrainerBattleKeys = {}
 		return
 	end
 
@@ -500,15 +566,70 @@ _G.F.jackScanTrainerNpcs = function()
 		return
 	end
 
-	for _, npc in ipairs(npcs) do
-		pcall(function()
-			_G.F.jackProcessTrainerNpc(npc)
-		end)
+	-- MrJack builds Names from chunk.battles and prunes stale dropdown entries.
+	local battleNames = {}
+	for _, battleData in pairs(battles) do
+		if type(battleData) == "table" then
+			local name = battleData.Name or battleData.name
+			if type(name) == "string" and name ~= "" then
+				battleNames[name] = true
+			end
+		end
+	end
+
+	for index = #_G.jackTrainerList, 1, -1 do
+		local name = _G.jackTrainerList[index]
+		if name ~= "Disabled" and not battleNames[name] then
+			table.remove(_G.jackTrainerList, index)
+			_G.jackTrainerConfigs[name] = nil
+			_G.jackTrainerBattleKeys[name] = nil
+		end
+	end
+
+	-- MrJack ForLooP iterates the full GetNPCs map (not ipairs-only).
+	local seen = {}
+	for _, npc in pairs(npcs) do
+		if type(npc) == "table" and not seen[npc] then
+			seen[npc] = true
+			pcall(function()
+				_G.F.jackProcessTrainerNpc(npc)
+			end)
+		end
 	end
 
 	table.sort(_G.jackTrainerList, function(a, b)
 		return tostring(a) < tostring(b)
 	end)
+end
+
+-- MrJack runs GetNPCs discovery on its own LooP, independent of Trainer Target.
+_G.F.jackRefreshTrainerTargetFromChunk = function()
+	if not _G.F.ensureP() then
+		return
+	end
+
+	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
+	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	local hasBattles = type(battles) == "table" and next(battles) ~= nil
+
+	if hasBattles then
+		_G.F.jackScanTrainerNpcs()
+	elseif #_G.jackTrainerList > 0 then
+		_G.jackTrainerList = {}
+		_G.jackTrainerConfigs = {}
+		_G.jackTrainerBattleKeys = {}
+	end
+
+	local signature = _G.F.getJackTrainerListSignature()
+	if signature ~= _G.jackLastTrainerListSignature then
+		_G.jackLastTrainerListSignature = signature
+		local forceValue = nil
+		if #_G.jackTrainerList == 0 then
+			forceValue = "Disabled"
+		end
+		_G.F.jackSyncTrainerDropdown(forceValue)
+	end
 end
 
 _G.F.jackInstallDoTrainerBattleHook = function()
@@ -532,10 +653,7 @@ _G.F.jackInstallDoTrainerBattleHook = function()
 			task.wait()
 		end
 
-		-- MrJack settle: waitHelper(2) before starting (not NPCChat:choose).
-		task.wait()
-		task.wait()
-
+		_G.F.jackEnterGameContext()
 		return original(self, config, ...)
 	end
 
@@ -677,6 +795,10 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 		return false
 	end
 
+	if _G.F.jackIsMoveBusy() then
+		return false
+	end
+
 	if not _G.F.jackHasBattleGuiInstance() then
 		return false
 	end
@@ -738,14 +860,17 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 					battleGui:exitButtonsMoveChosen()
 				end)
 			end
+			_G.F.jackMarkMoveBusy(0.35)
 			return true
 		end
 	end
 
 	if not moveData.disabled then
+		_G.F.jackEnterGameContext()
 		pcall(function()
 			battleGui:onMoveClicked(moveSlot)
 		end)
+		_G.F.jackMarkMoveBusy(0.35)
 		return true
 	end
 
@@ -784,18 +909,12 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false
 	end
 
+	-- Discovery/sync is owned by jackRefreshTrainerTargetFromChunk (always-on loop).
 	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
 	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
 	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	local hasBattles = type(battles) == "table" and next(battles) ~= nil
-
-	if hasBattles then
-		_G.F.jackScanTrainerNpcs()
-		local signature = _G.F.getJackTrainerListSignature()
-		if signature ~= _G.jackLastTrainerListSignature then
-			_G.jackLastTrainerListSignature = signature
-			_G.F.jackSyncTrainerDropdown()
-		end
+	if type(battles) ~= "table" or next(battles) == nil then
+		return false
 	end
 
 	if not table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer) then
@@ -809,14 +928,22 @@ _G.F.jackRunAutoTrainerTick = function()
 
 	local opponentBaseNPC = config.opponentBaseNPC
 	local opponentModel = type(opponentBaseNPC) == "table" and opponentBaseNPC.model or nil
-	if type(opponentModel) ~= "userdata" or not opponentModel:IsDescendantOf(workspace) then
+	if not _G.F.jackIsNpcModel(opponentModel) then
+		return false, "Trainer NPC is not nearby."
+	end
+	local inWorkspace = false
+	pcall(function()
+		inWorkspace = opponentModel:IsDescendantOf(workspace)
+	end)
+	if not inWorkspace then
 		return false, "Trainer NPC is not nearby."
 	end
 
 	local battleKey = _G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer]
-	if battleKey and type(battles) == "table" and not battles[battleKey] and not battles[tonumber(battleKey)] then
+	if battleKey and not battles[battleKey] and not battles[tonumber(battleKey)] then
 		table.remove(_G.jackTrainerList, table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer))
 		_G.jackTrainerConfigs[_G.jackAutoBattle.Trainer] = nil
+		_G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer] = nil
 		_G.F.jackSyncTrainerDropdown("Disabled")
 		return false, "Trainer battle data left this area."
 	end
@@ -881,10 +1008,20 @@ _G.F.jackStartBattleLoops = function()
 
 	_G.jackBattleLoopsStarted = true
 
+	-- MrJack: continuous GetNPCs trainer discovery, even while Target is Disabled.
+	task.spawn(function()
+		while _G.uiAlive do
+			pcall(_G.F.jackRefreshTrainerTargetFromChunk)
+			task.wait(0.25)
+		end
+	end)
+
 	task.spawn(function()
 		while _G.uiAlive do
 			if _G.jackAutoBattle.Move ~= "Disabled" then
-				pcall(_G.F.jackRunAutoMoveTick, _G.autoEncounterEnabled and true or false)
+				-- MrJack Auto Move is trainer/non-wild only. Wild moves are owned
+				-- by the Farm encounter loop via useMoveOne(allowWild=true).
+				pcall(_G.F.jackRunAutoMoveTick, false)
 			end
 			task.wait(0.1)
 		end
@@ -1230,8 +1367,7 @@ _G.F.jackIgnoreNpcGetBit = function(...)
 			table.insert(session, trainerId)
 		end
 
-		task.wait()
-		task.wait()
+		_G.F.jackEnterGameContext()
 	end
 
 	local original = _G.jackBitBufferGetBitOriginal
@@ -1333,28 +1469,57 @@ _G.F.processJackNpcChatSay = function(args)
 		return stripped, true
 	end
 
-	if string.lower(string.sub(text, 1, 5)) ~= "[y/n]" then
-		return args, false
-	end
-
-	if _G.jackMiscSettings.NoSwitch and string.find(text, "Will you switch Loomians", 1, true) then
-		args[textIndex] = "Auto Deny Swicth Question Enabled!"
-		return args, true
-	end
-
-	if _G.jackMiscSettings.NoNick and string.find(text, "Give a nickname to the", 1, true) then
-		args[textIndex] = "Auto Deny Nickname Enabled!"
-		return args, true
-	end
-
-	if _G.jackMiscSettings.NoNewMoves then
-		local lower = string.lower(text)
-		if string.find(lower, "reassign its moves", 1, true) then
-			args[textIndex] = "Auto Deny Reassign Move Enabled!"
+	local isYn = string.lower(string.sub(text, 1, 5)) == "[y/n]"
+	if isYn then
+		if _G.jackMiscSettings.NoSwitch and string.find(text, "Will you switch Loomians", 1, true) then
+			args[textIndex] = "Auto Deny Swicth Question Enabled!"
 			return args, true
 		end
-		if string.find(lower, " to give up on learning ", 1, true) then
-			return "Y/N", true
+
+		if _G.jackMiscSettings.NoNick and string.find(text, "Give a nickname to the", 1, true) then
+			args[textIndex] = "Auto Deny Nickname Enabled!"
+			return args, true
+		end
+
+		if _G.jackMiscSettings.NoNewMoves then
+			local lower = string.lower(text)
+			if string.find(lower, "reassign its moves", 1, true) then
+				args[textIndex] = "Auto Deny Reassign Move Enabled!"
+				return args, true
+			end
+			if string.find(lower, " to give up on learning ", 1, true) then
+				return "Y/N", true
+			end
+		end
+	end
+
+	-- MrJack Skip Dialogue: strip [y/n] / [gamepad] prefixes so prompts and
+	-- dialogue advance through the hooked Say/message path (poll remains as backup).
+	if _G.skipDialogueEnabled then
+		local out = {}
+		local changed = false
+		for i = 1, #args do
+			local value = args[i]
+			if type(value) == "string" then
+				local s = value
+				local lowerPrefix5 = string.lower(string.sub(s, 1, 5))
+				local lowerPrefix9 = string.lower(string.sub(s, 1, 9))
+				if lowerPrefix5 == "[y/n]" then
+					s = string.sub(s, 6)
+					changed = true
+				elseif lowerPrefix9 == "[gamepad]" then
+					s = string.sub(s, 10)
+					changed = true
+				else
+					changed = true
+				end
+				out[i] = s
+			else
+				out[i] = value
+			end
+		end
+		if changed then
+			return out, true
 		end
 	end
 
@@ -1380,24 +1545,194 @@ _G.F.wrapJackNpcChatHandler = function(host, methodName)
 	host[methodName] = function(...)
 		_G.F.syncJackMiscSettings()
 		local packed = { ... }
-		local first, shouldAutoDeny = _G.F.processJackNpcChatSay(packed)
+		local first, filtered = _G.F.processJackNpcChatSay(packed)
 
 		if first == "Y/N" then
-			return shouldAutoDeny
+			return filtered
 		end
 
-		if shouldAutoDeny then
+		if filtered then
 			local chat = type(_G._p) == "table" and _G._p.NPCChat or nil
-			if type(chat) == "table" and type(chat.choose) == "function" then
-				pcall(function()
-					chat:choose(2)
-				end)
+			if type(chat) == "table" then
+				if _G.skipDialogueEnabled then
+					chat.fastForward = true
+				end
+				if type(chat.choose) == "function" then
+					-- Deny path for rewritten Y/N prompts (NoSwitch / NoNick / NoNewMoves).
+					local text = type(first) == "table" and first[2] or nil
+					if type(text) == "string" and string.find(text, "Auto Deny", 1, true) then
+						pcall(function()
+							chat:choose(2)
+						end)
+					end
+				end
 			end
+			_G.F.jackEnterGameContext()
 			return original(unpack(first))
 		end
 
+		_G.F.jackEnterGameContext()
 		return original(...)
 	end
+end
+
+_G.F.jackInstallSwitchMonsterBusyHook = function()
+	if not _G.F.ensureP() then
+		return false
+	end
+
+	local battleGui = _G.F.safeTableGet(_G._p, "BattleGui")
+	if type(battleGui) ~= "table" or type(battleGui.switchMonster) ~= "function" then
+		return false
+	end
+
+	if battleGui.__jackSwitchMonsterHooked then
+		return true
+	end
+
+	local original = battleGui.switchMonster
+	battleGui.switchMonster = function(self, ...)
+		local packed = { ... }
+		local latch = packed[3] ~= false
+		if latch then
+			_G.jackMoveBusy = true
+		end
+
+		_G.F.jackEnterGameContext()
+		local results = { pcall(original, self, ...) }
+
+		if latch then
+			_G.jackMoveBusy = false
+		end
+
+		if results[1] then
+			return unpack(results, 2)
+		end
+	end
+
+	battleGui.__jackSwitchMonsterHooked = true
+	_G.jackSwitchMonsterOriginal = original
+	return true
+end
+
+_G.jackFastBattleHookOriginals = _G.jackFastBattleHookOriginals or {}
+
+_G.F.jackWrapNamedMethod = function(host, methodName, wrapperFactory)
+	if type(host) ~= "table" or type(methodName) ~= "string" then
+		return false
+	end
+
+	local original = host[methodName]
+	if type(original) ~= "function" then
+		return false
+	end
+
+	_G.jackFastBattleHookOriginals[host] = _G.jackFastBattleHookOriginals[host] or {}
+	if _G.jackFastBattleHookOriginals[host][methodName] then
+		return true
+	end
+
+	_G.jackFastBattleHookOriginals[host][methodName] = original
+	host[methodName] = wrapperFactory(original)
+	return true
+end
+
+_G.F.jackInstallFastBattleHooks = function()
+	if not _G.F.ensureP() then
+		return false
+	end
+
+	local battleGui = _G.F.safeTableGet(_G._p, "BattleGui")
+	if type(battleGui) == "table" then
+		for _, methodName in ipairs({
+			"animWeather", "animStatus", "animAbility", "animBoost", "animHit", "animMove",
+		}) do
+			_G.F.jackWrapNamedMethod(battleGui, methodName, function(original)
+				return function(...)
+					if _G.fastForwardEnabled then
+						return
+					end
+					_G.F.jackEnterGameContext()
+					return original(...)
+				end
+			end)
+		end
+
+		_G.F.jackWrapNamedMethod(battleGui, "setCameraIfLookingAway", function(original)
+			return function(self, battle, ...)
+				local previous = nil
+				if type(battle) == "table" then
+					previous = battle.fastForward
+					if _G.fastForwardEnabled then
+						battle.fastForward = true
+					end
+				end
+				_G.F.jackEnterGameContext()
+				local ok, a, b, c = pcall(original, self, battle, ...)
+				if type(battle) == "table" then
+					battle.fastForward = previous or false
+				end
+				if ok then
+					return a, b, c
+				end
+			end
+		end)
+	end
+
+	local roundedFrame = _G.F.safeTableGet(_G._p, "RoundedFrame")
+	if type(roundedFrame) == "table" then
+		_G.F.jackWrapNamedMethod(roundedFrame, "setFillbarRatio", function(original)
+			return function(self, a, b, animate, ...)
+				if _G.fastForwardEnabled and (_G.F.jackGetBattle() or _G.F.getCurrentBattle()) then
+					animate = false
+				end
+				_G.F.jackEnterGameContext()
+				return original(self, a, b, animate, ...)
+			end
+		end)
+	end
+
+	local function wrapFastForwardBracket(host, methodName, battleIndex)
+		_G.F.jackWrapNamedMethod(host, methodName, function(original)
+			return function(...)
+				local packed = { ... }
+				local owner = packed[battleIndex]
+				local battle = type(owner) == "table" and (owner.battle or owner) or nil
+				local previous = nil
+				if type(battle) == "table" then
+					previous = battle.fastForward
+					battle.fastForward = _G.fastForwardEnabled and true or false
+				end
+				_G.F.jackEnterGameContext()
+				local results = { pcall(original, ...) }
+				if type(battle) == "table" then
+					battle.fastForward = previous or false
+				end
+				if results[1] then
+					return unpack(results, 2)
+				end
+			end
+		end)
+	end
+
+	local sprite = _G.F.safeTableGet(_G._p, "BattleClientSprite")
+	if type(sprite) == "table" then
+		for _, methodName in ipairs({
+			"animFaint", "animSummon", "animUnsummon", "monsterIn", "monsterOut",
+			"animEmulate", "animScapegoat", "animScapegoatIn", "animScapegoatOut", "animRecolor",
+		}) do
+			wrapFastForwardBracket(sprite, methodName, 1)
+		end
+	end
+
+	local side = _G.F.safeTableGet(_G._p, "BattleClientSide")
+	if type(side) == "table" then
+		for _, methodName in ipairs({ "switchOut", "faint", "swapTo", "dragIn" }) do
+			wrapFastForwardBracket(side, methodName, 1)
+		end
+	end
+
+	return true
 end
 
 _G.F.installJackStyleGameplayHooks = function()
@@ -1407,6 +1742,8 @@ _G.F.installJackStyleGameplayHooks = function()
 
 	_G.F.syncJackMiscSettings()
 	_G.F.jackInstallIgnoreNpcBattleHook()
+	_G.F.jackInstallSwitchMonsterBusyHook()
+	_G.F.jackInstallFastBattleHooks()
 
 	local menu = _G.F.safeTableGet(_G._p, "Menu")
 	local mastery = type(menu) == "table" and _G.F.safeTableGet(menu, "mastery") or nil
@@ -1419,6 +1756,7 @@ _G.F.installJackStyleGameplayHooks = function()
 			if _G.jackMiscSettings.NoProgress or _G.disableShowProgressEnabled then
 				return
 			end
+			_G.F.jackEnterGameContext()
 			return _G.showProgressHookOriginal(...)
 		end
 	end
@@ -1464,6 +1802,28 @@ _G.F.restoreJackStyleGameplayHooks = function()
 		end
 	end
 	_G.jackNpcChatHookOriginals = {}
+
+	for host, methods in pairs(_G.jackFastBattleHookOriginals) do
+		if type(host) == "table" and type(methods) == "table" then
+			for methodName, original in pairs(methods) do
+				if type(original) == "function" then
+					pcall(function()
+						host[methodName] = original
+					end)
+				end
+			end
+		end
+	end
+	_G.jackFastBattleHookOriginals = {}
+
+	local battleGui = _G.F.safeTableGet(_G._p, "BattleGui")
+	if type(battleGui) == "table" and type(_G.jackSwitchMonsterOriginal) == "function" then
+		pcall(function()
+			battleGui.switchMonster = _G.jackSwitchMonsterOriginal
+			battleGui.__jackSwitchMonsterHooked = nil
+		end)
+		_G.jackSwitchMonsterOriginal = nil
+	end
 
 	local bitBuffer = _G.F.safeTableGet(_G._p, "BitBuffer")
 	if type(bitBuffer) == "table" and type(_G.jackBitBufferGetBitOriginal) == "function" then
