@@ -1259,6 +1259,10 @@ _G.F.disableAllFeatures = function()
 	_G.denySwitchRequestEnabled = false
 	_G.denyNicknameEnabled = false
 	_G.disableShowProgressEnabled = false
+	_G.ignoreNpcBattleEnabled = false
+	_G.jackIgnoreNpcSession = {}
+	_G.useSpareEnabled = false
+	_G.corruptMove = "Disabled"
 	_G.F.setAutoBattleEnabled(false)
 	_G.F.jackSetAutoMove("Disabled")
 	_G.F.jackSetAutoTrainer("Disabled")
@@ -1627,6 +1631,9 @@ _G.F.collectConfigSnapshot = function()
 		denySwitchRequestEnabled = _G.F.getToggleConfigValue(_G.configUi.denySwitchRequestToggle, _G.denySwitchRequestEnabled),
 		denyNicknameEnabled = _G.F.getToggleConfigValue(_G.configUi.denyNicknameToggle, _G.denyNicknameEnabled),
 		disableShowProgressEnabled = _G.F.getToggleConfigValue(_G.configUi.disableShowProgressToggle, _G.disableShowProgressEnabled),
+		ignoreNpcBattleEnabled = _G.F.getToggleConfigValue(_G.configUi.ignoreNpcBattleToggle, _G.ignoreNpcBattleEnabled),
+		useSpareEnabled = _G.F.getToggleConfigValue(_G.configUi.useSpareToggle, _G.useSpareEnabled),
+		corruptMove = _G.corruptMove,
 		autoBattleEnabled = _G.F.getToggleConfigValue(_G.configUi.autoBattleToggle, _G.autoBattleEnabled),
 		noUnstuckCooldownEnabled = _G.F.getToggleConfigValue(_G.configUi.noUnstuckCooldownToggle, _G.noUnstuckCooldownEnabled),
 	}
@@ -1868,6 +1875,16 @@ _G.F.applyConfigVariables = function(data)
 	if data.disableShowProgressEnabled ~= nil then
 		_G.disableShowProgressEnabled = _G.F.configBool(data.disableShowProgressEnabled, false)
 	end
+	if data.ignoreNpcBattleEnabled ~= nil then
+		_G.ignoreNpcBattleEnabled = _G.F.configBool(data.ignoreNpcBattleEnabled, false)
+		_G.jackIgnoreNpcSession = {}
+	end
+	if data.useSpareEnabled ~= nil then
+		_G.useSpareEnabled = _G.F.configBool(data.useSpareEnabled, false)
+	end
+	if data.corruptMove ~= nil then
+		_G.corruptMove = tostring(data.corruptMove)
+	end
 	if data.autoBattleEnabled ~= nil then
 		_G.F.setAutoBattleEnabled(_G.F.configBool(data.autoBattleEnabled, false))
 	end
@@ -1983,6 +2000,17 @@ _G.F.syncConfigUiFromVariables = function()
 	end
 	if _G.configUi.disableShowProgressToggle then
 		_G.F.setToggleUi(_G.configUi.disableShowProgressToggle, _G.disableShowProgressEnabled)
+	end
+	if _G.configUi.ignoreNpcBattleToggle then
+		_G.F.setToggleUi(_G.configUi.ignoreNpcBattleToggle, _G.ignoreNpcBattleEnabled)
+	end
+	if _G.configUi.useSpareToggle then
+		_G.F.setToggleUi(_G.configUi.useSpareToggle, _G.useSpareEnabled)
+	end
+	if _G.configUi.corruptMoveDropdown and type(_G.configUi.corruptMoveDropdown.Set) == "function" then
+		pcall(function()
+			_G.configUi.corruptMoveDropdown:Set(_G.corruptMove or "Disabled")
+		end)
 	end
 	if _G.configUi.autoBattleToggle then
 		_G.F.setToggleUi(_G.configUi.autoBattleToggle, _G.autoBattleEnabled)

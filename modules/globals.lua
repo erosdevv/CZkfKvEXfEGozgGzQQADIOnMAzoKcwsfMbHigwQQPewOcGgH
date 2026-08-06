@@ -240,10 +240,13 @@ _G.denyReassignMoveEnabled = false
 _G.denySwitchRequestEnabled = false
 _G.denyNicknameEnabled = false
 _G.disableShowProgressEnabled = false
+_G.ignoreNpcBattleEnabled = false
 _G.autoBattleEnabled = false
 _G.noUnstuckCooldownEnabled = false
 _G.lastAutoHealAt = 0
 _G.lastActiveRepellentAt = 0
+_G.useSpareEnabled = false
+_G.corruptMove = "Disabled"
 
 -- Trainer
 _G.trainerId = 69

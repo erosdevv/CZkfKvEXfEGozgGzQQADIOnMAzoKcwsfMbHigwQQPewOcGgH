@@ -79,12 +79,27 @@ _G.F.runAutoHealOnce = function(force)
 	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
 	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
 	local chunkData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "data") or nil
-	if not force and type(chunkData) == "table" and chunkData.HasOutsideHealers then
+	local regionData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "regionData") or nil
+	local blackOutTo = type(regionData) == "table" and regionData.BlackOutTo or nil
+	if not blackOutTo and type(chunkData) == "table" then
+		blackOutTo = chunkData.blackOutTo
+	end
+
+	-- MrJack: outdoor path only when HasOutsideHealers + a blackout target exist.
+	local canOutdoorHeal = (not force)
+		and type(chunkData) == "table"
+		and chunkData.HasOutsideHealers
+		and blackOutTo ~= nil
+
+	if canOutdoorHeal then
 		if not _G.jackOutdoorHealRunning then
 			_G.jackOutdoorHealRunning = true
 			task.spawn(function()
-				pcall(_G.F.jackPerformOutdoorHeal)
+				local ok, err = pcall(_G.F.jackPerformOutdoorHeal)
 				_G.jackOutdoorHealRunning = false
+				if not ok then
+					warn("[Auto Heal] " .. tostring(err))
+				end
 			end)
 		end
 		return true, "Outdoor heal started."
@@ -96,6 +111,24 @@ _G.F.runAutoHealOnce = function(force)
 	end
 
 	return false, tostring(result or "Heal request failed.")
+end
+
+_G.F.jackIsLoomianCareDisabled = function()
+	local objectiveManager = _G.F.safeTableGet(_G._p, "ObjectiveManager")
+	if type(objectiveManager) ~= "table" then
+		return false
+	end
+
+	local disabledBy = objectiveManager.disabledBy
+	if disabledBy == "LoomianCare" then
+		return true
+	end
+
+	if type(disabledBy) == "table" and disabledBy.LoomianCare then
+		return true
+	end
+
+	return false
 end
 
 _G.F.jackCanAutoHealNow = function()
@@ -119,16 +152,30 @@ _G.F.jackCanAutoHealNow = function()
 		return false
 	end
 
+	if _G.jackOutdoorHealRunning then
+		return false
+	end
+
 	if _G.F.jackGetBattle() then
 		return false
 	end
 
-	local objectiveManager = _G.F.safeTableGet(_G._p, "ObjectiveManager")
-	if type(objectiveManager) == "table" and objectiveManager.disabledBy == "LoomianCare" then
+	if _G.F.jackIsLoomianCareDisabled() then
 		return false
 	end
 
 	return true
+end
+
+_G.F.jackAnnounceAutoHeal = function()
+	local chat = _G.F.safeTableGet(_G._p, "NPCChat")
+	if type(chat) ~= "table" or type(chat.Say) ~= "function" then
+		return
+	end
+
+	pcall(function()
+		chat:Say("[ma][LLSPLOIT]Auto healing...")
+	end)
 end
 
 _G.F.jackPerformOutdoorHeal = function()
@@ -156,57 +203,69 @@ _G.F.jackPerformOutdoorHeal = function()
 		blackOutTo = type(chunkData) == "table" and chunkData.blackOutTo or nil
 	end
 
+	if not blackOutTo then
+		local ok, result = _G.F.networkGet("heal", nil, "HealMachine1")
+		return ok and result ~= false
+	end
+
 	local originalChunkId = currentChunk.id
 	local restoreWalkEnabled = nil
 	local utilities = _G.F.safeTableGet(_G._p, "Utilities")
 
-	if blackOutTo then
-		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
-		if type(masterControl) == "table" then
-			restoreWalkEnabled = masterControl.WalkEnabled
-			masterControl.WalkEnabled = false
-		end
+	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
+	if type(masterControl) == "table" then
+		restoreWalkEnabled = masterControl.WalkEnabled
+		masterControl.WalkEnabled = false
+	end
 
-		local menu = _G.F.safeTableGet(_G._p, "Menu")
-		if type(menu) == "table" then
-			pcall(function()
-				if type(menu.disable) == "function" then
-					menu:disable()
-				end
-				if type(menu.fastClose) == "function" then
-					menu:fastClose(3)
-				end
-			end)
-		end
+	local menu = _G.F.safeTableGet(_G._p, "Menu")
+	if type(menu) == "table" then
+		pcall(function()
+			if type(menu.disable) == "function" then
+				menu:disable()
+			end
+			if type(menu.fastClose) == "function" then
+				menu:fastClose(3)
+			end
+		end)
+	end
 
-		if type(utilities) == "table" and type(utilities.FadeOut) == "function" then
-			pcall(function()
-				utilities:FadeOut(1)
-			end)
-		end
+	if type(utilities) == "table" and type(utilities.FadeOut) == "function" then
+		pcall(function()
+			utilities:FadeOut(1)
+		end)
+	end
 
-		if type(utilities) == "table" and type(utilities.TeleportToSpawnBox) == "function" then
-			pcall(function()
-				utilities:TeleportToSpawnBox()
-			end)
-		end
+	task.spawn(_G.F.jackAnnounceAutoHeal)
 
-		if type(currentChunk.unbindIndoorCam) == "function" then
-			pcall(function()
-				currentChunk:unbindIndoorCam()
-			end)
-		end
-		if type(currentChunk.destroy) == "function" then
-			pcall(function()
-				currentChunk:destroy()
-			end)
-		end
+	if type(utilities) == "table" and type(utilities.TeleportToSpawnBox) == "function" then
+		pcall(function()
+			utilities:TeleportToSpawnBox()
+		end)
+	end
 
-		local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
-		if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
-			pcall(function()
-				dataManager:loadChunk(blackOutTo)
-			end)
+	if type(currentChunk.unbindIndoorCam) == "function" then
+		pcall(function()
+			currentChunk:unbindIndoorCam()
+		end)
+	end
+	if type(currentChunk.destroy) == "function" then
+		pcall(function()
+			currentChunk:destroy()
+		end)
+	end
+
+	-- MrJack settle before loading the blackout / Health Center chunk.
+	task.wait(2)
+
+	local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+	if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
+		local okLoad, loaded = pcall(function()
+			return dataManager:loadChunk(blackOutTo)
+		end)
+		if okLoad and type(loaded) == "table" then
+			currentChunk = loaded
+		else
 			currentChunk = dataManager.currentChunk
 		end
 	end
@@ -217,6 +276,8 @@ _G.F.jackPerformOutdoorHeal = function()
 
 	local door = type(currentChunk.getDoor) == "function" and currentChunk:getDoor("HealthCenter") or nil
 	local room = type(currentChunk.getRoom) == "function" and currentChunk:getRoom("HealthCenter", door, 1) or nil
+
+	task.wait()
 	local okHealer, healerId = _G.F.networkGet("getHealer", "HealthCenter")
 	if not okHealer or not healerId then
 		task.wait()
@@ -225,6 +286,8 @@ _G.F.jackPerformOutdoorHeal = function()
 
 	if okHealer and healerId then
 		_G.F.networkGet("heal", "HealthCenter", healerId)
+	else
+		_G.F.networkGet("heal", nil, "HealMachine1")
 	end
 
 	if type(room) == "table" and type(room.Destroy) == "function" then
@@ -233,14 +296,14 @@ _G.F.jackPerformOutdoorHeal = function()
 		end)
 	end
 
-	if blackOutTo and originalChunkId then
+	if originalChunkId then
 		if type(currentChunk.destroy) == "function" then
 			pcall(function()
 				currentChunk:destroy()
 			end)
 		end
 
-		local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+		dataManager = _G.F.safeTableGet(_G._p, "DataManager")
 		if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
 			pcall(function()
 				dataManager:loadChunk(originalChunkId)
@@ -253,7 +316,7 @@ _G.F.jackPerformOutdoorHeal = function()
 			end)
 		end
 
-		local menu = _G.F.safeTableGet(_G._p, "Menu")
+		menu = _G.F.safeTableGet(_G._p, "Menu")
 		if type(menu) == "table" and type(menu.enable) == "function" then
 			pcall(function()
 				menu:enable()
@@ -273,7 +336,7 @@ _G.F.jackPerformOutdoorHeal = function()
 			end)
 		end
 
-		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
+		masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 		if type(masterControl) == "table" then
 			masterControl.WalkEnabled = restoreWalkEnabled ~= false
 		end
@@ -469,18 +532,144 @@ _G.F.jackInstallDoTrainerBattleHook = function()
 			task.wait()
 		end
 
-		local chat = _G.F.safeTableGet(_G._p, "NPCChat")
-		if type(chat) == "table" and type(chat.choose) == "function" then
-			pcall(function()
-				chat:choose(2)
-			end)
-		end
+		-- MrJack settle: waitHelper(2) before starting (not NPCChat:choose).
+		task.wait()
+		task.wait()
 
 		return original(self, config, ...)
 	end
 
 	battleModule.__jackDoTrainerBattleHooked = true
 	_G.jackDoTrainerBattleHooked = true
+end
+
+_G.F.jackGetBattleGuiMoveName = function(moveData)
+	if type(moveData) ~= "table" then
+		return nil
+	end
+
+	local name = moveData.move or moveData.name or moveData.Name
+	if type(name) == "string" and name ~= "" then
+		return name
+	end
+
+	return nil
+end
+
+_G.F.jackFindMoveSlotByName = function(battleGui, moveName)
+	if type(battleGui) ~= "table" or type(moveName) ~= "string" then
+		return nil
+	end
+
+	local moves = battleGui.moves
+	if type(moves) ~= "table" then
+		return nil
+	end
+
+	for slot = 1, 4 do
+		local moveData = moves[slot]
+		if _G.F.jackGetBattleGuiMoveName(moveData) == moveName and not moveData.disabled then
+			return slot
+		end
+	end
+
+	for slot, moveData in pairs(moves) do
+		local numeric = tonumber(slot)
+		if numeric and _G.F.jackGetBattleGuiMoveName(moveData) == moveName and not moveData.disabled then
+			return numeric
+		end
+	end
+
+	return nil
+end
+
+_G.F.jackGetBattleFoe = function(battle, battleGui)
+	if type(battleGui) == "table" then
+		for _, key in ipairs({ "foe", "opponent", "activeFoe", "enemyMonster" }) do
+			local foe = battleGui[key]
+			if type(foe) == "table" then
+				return foe
+			end
+		end
+	end
+
+	if type(battle) ~= "table" then
+		return nil
+	end
+
+	local side = battle.p2 or battle.opponent or battle.foeSide
+	if type(side) == "table" then
+		local active = side.active or side.monsters and side.monsters[side.activeIndex or 1]
+		if type(active) == "table" then
+			return active
+		end
+		if type(side.monsters) == "table" then
+			for _, monster in ipairs(side.monsters) do
+				if type(monster) == "table" then
+					return monster
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+_G.F.jackGetFoeHpRatio = function(foe)
+	if type(foe) ~= "table" then
+		return nil
+	end
+
+	local hp, maxHp
+	for _, key in ipairs({ "hp", "cHp", "chp", "curHp", "currentHp", "curHP", "health", "HP" }) do
+		local value = foe[key]
+		if type(value) == "number" then
+			hp = value
+			break
+		end
+	end
+
+	for _, key in ipairs({ "maxhp", "maxHp", "maxHP", "mhp", "maxHealth", "MaxHP" }) do
+		local value = foe[key]
+		if type(value) == "number" and value > 0 then
+			maxHp = value
+			break
+		end
+	end
+
+	if type(hp) == "number" and type(maxHp) == "number" and maxHp > 0 then
+		return hp / maxHp
+	end
+
+	return nil
+end
+
+_G.F.jackResolveWildAutoMoveSlot = function(battle, battleGui, fallbackSlot)
+	fallbackSlot = math.clamp(math.floor(tonumber(fallbackSlot) or 1), 1, 4)
+	if type(battle) ~= "table" or battle.kind ~= "wild" or type(battleGui) ~= "table" then
+		return fallbackSlot
+	end
+
+	local foe = _G.F.jackGetBattleFoe(battle, battleGui)
+	if _G.useSpareEnabled then
+		local ratio = _G.F.jackGetFoeHpRatio(foe)
+		if type(ratio) == "number" and ratio <= 0.2 then
+			local spareSlot = _G.F.jackFindMoveSlotByName(battleGui, "Spare")
+			if spareSlot then
+				return spareSlot
+			end
+		end
+	end
+
+	local corruptMove = tostring(_G.corruptMove or "Disabled")
+	if foe and foe.corrupt and string.find(corruptMove, "Move", 1, true) then
+		local corruptSlot = tonumber(string.match(corruptMove, "(%d+)"))
+		if corruptSlot then
+			return math.clamp(math.floor(corruptSlot), 1, 4)
+		end
+	end
+
+	return fallbackSlot
 end
 
 _G.F.jackUseBattleGuiMove = function(moveSlot)
@@ -578,6 +767,11 @@ _G.F.jackRunAutoMoveTick = function(allowWild)
 	end
 
 	local moveSlot = tonumber(string.match(_G.jackAutoBattle.Move, "(%d+)")) or 1
+	local battleGui = _G.F.getBattleGuiModule()
+	if allowWild then
+		moveSlot = _G.F.jackResolveWildAutoMoveSlot(battle, battleGui, moveSlot)
+	end
+
 	return _G.F.jackUseBattleGuiMove(moveSlot)
 end
 
@@ -988,12 +1182,123 @@ _G.resetLastUnstuckHookOriginal = _G.resetLastUnstuckHookOriginal or nil
 _G.battleTheatrePuzzleHookOriginals = _G.battleTheatrePuzzleHookOriginals or {}
 _G.jackNpcChatHookOriginals = _G.jackNpcChatHookOriginals or {}
 _G.jackMiscSettings = _G.jackMiscSettings or {}
+_G.jackIgnoreNpcSession = _G.jackIgnoreNpcSession or {}
+_G.jackBitBufferGetBitOriginal = _G.jackBitBufferGetBitOriginal or nil
 
 _G.F.syncJackMiscSettings = function()
 	_G.jackMiscSettings.NoNick = _G.denyNicknameEnabled and true or false
 	_G.jackMiscSettings.NoSwitch = _G.denySwitchRequestEnabled and true or false
 	_G.jackMiscSettings.NoNewMoves = _G.denyReassignMoveEnabled and true or false
 	_G.jackMiscSettings.NoProgress = _G.disableShowProgressEnabled and true or false
+end
+
+-- MrJack Ignore NPC Battle: wrap BitBuffer.GetBit so trainers already seen on
+-- this map are treated as defeated while the toggle is on.
+_G.F.jackIgnoreNpcGetBit = function(...)
+	local packed = { ... }
+	local session = _G.jackIgnoreNpcSession
+	if type(session) ~= "table" then
+		session = {}
+		_G.jackIgnoreNpcSession = session
+	end
+
+	local currentChunk = type(_G._p) == "table" and _G.F.safeTableGet(_G._p, "DataManager") or nil
+	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local map = type(currentChunk) == "table" and currentChunk.map or nil
+	if map ~= nil and not table.find(session, map) then
+		if type(table.clear) == "function" then
+			table.clear(session)
+		else
+			for i = #session, 1, -1 do
+				session[i] = nil
+			end
+		end
+		table.insert(session, map)
+	end
+
+	local playerData = type(_G._p) == "table" and _G.F.safeTableGet(_G._p, "PlayerData") or nil
+	local defeatedTrainers = type(playerData) == "table" and playerData.defeatedTrainers or nil
+	local target = packed[1]
+	local trainerId = packed[2]
+
+	if target == defeatedTrainers and trainerId ~= nil then
+		if _G.ignoreNpcBattleEnabled and table.find(session, trainerId) then
+			return true
+		end
+
+		if not table.find(session, trainerId) then
+			table.insert(session, trainerId)
+		end
+
+		task.wait()
+		task.wait()
+	end
+
+	local original = _G.jackBitBufferGetBitOriginal
+	if type(original) == "function" then
+		return original(...)
+	end
+
+	return false
+end
+
+_G.F.jackInstallIgnoreNpcBattleHook = function()
+	if not _G.F.ensureP() then
+		return false
+	end
+
+	local bitBuffer = _G.F.safeTableGet(_G._p, "BitBuffer")
+	if type(bitBuffer) ~= "table" or type(bitBuffer.GetBit) ~= "function" then
+		return false
+	end
+
+	if bitBuffer.__jackIgnoreNpcHooked then
+		return true
+	end
+
+	_G.jackBitBufferGetBitOriginal = bitBuffer.GetBit
+	bitBuffer.GetBit = function(...)
+		return _G.F.jackIgnoreNpcGetBit(...)
+	end
+	bitBuffer.__jackIgnoreNpcHooked = true
+	return true
+end
+
+_G.F.endCurrentBattleForce = function()
+	if not _G.F.ensureP() then
+		return false, "Hook is not ready."
+	end
+
+	local battle = _G.F.jackGetBattle() or _G.F.getCurrentBattle()
+	if type(battle) ~= "table" then
+		return false, "No active battle."
+	end
+
+	if battle.CanRun == false then
+		return false, "This battle cannot be force-ended (CanRun is false)."
+	end
+
+	local battleGui = _G.F.getBattleGuiModule()
+	local idle = type(battleGui) == "table" and battleGui.IdleCameraController or nil
+	if type(idle) == "table" and type(idle.quit) == "function" then
+		pcall(function()
+			idle:quit(battle)
+		end)
+	end
+
+	pcall(function()
+		_G.F.callBattleCameraMethod("stopIdleCamera", battle)
+		_G.F.callBattleCameraMethod("StopIdleCamera", battle)
+	end)
+
+	pcall(function()
+		battle.ended = true
+		if battle.BattleEnded and type(battle.BattleEnded.Fire) == "function" then
+			battle.BattleEnded:Fire()
+		end
+	end)
+
+	return true, "Battle ended."
 end
 
 _G.F.processJackNpcChatSay = function(args)
@@ -1101,6 +1406,7 @@ _G.F.installJackStyleGameplayHooks = function()
 	end
 
 	_G.F.syncJackMiscSettings()
+	_G.F.jackInstallIgnoreNpcBattleHook()
 
 	local menu = _G.F.safeTableGet(_G._p, "Menu")
 	local mastery = type(menu) == "table" and _G.F.safeTableGet(menu, "mastery") or nil
@@ -1158,6 +1464,15 @@ _G.F.restoreJackStyleGameplayHooks = function()
 		end
 	end
 	_G.jackNpcChatHookOriginals = {}
+
+	local bitBuffer = _G.F.safeTableGet(_G._p, "BitBuffer")
+	if type(bitBuffer) == "table" and type(_G.jackBitBufferGetBitOriginal) == "function" then
+		pcall(function()
+			bitBuffer.GetBit = _G.jackBitBufferGetBitOriginal
+			bitBuffer.__jackIgnoreNpcHooked = nil
+		end)
+		_G.jackBitBufferGetBitOriginal = nil
+	end
 
 	local options = type(menu) == "table" and _G.F.safeTableGet(menu, "options") or nil
 	if type(options) == "table" and _G.resetLastUnstuckHookOriginal then
