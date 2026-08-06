@@ -15,7 +15,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGo
 | `globals` | Services + shared state |
 | `core` | Core helpers + FishingAutomation |
 | `battle` | Battle helpers / natural run |
-| `world` | Egg rain, UMV, mining, movement |
+| `world` | UMV, mining, movement |
 | `combat` | Heal, trainers, prompts, servers |
 | `static` | Soft-reset StaticAutomation |
 | `shops` | Rally, shops, boonary |
