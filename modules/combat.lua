@@ -1071,6 +1071,18 @@ end
 _G.F.jackSetAutoTrainer = function(value)
 	_G.jackAutoBattle.Trainer = value or "Disabled"
 	_G.autoTrainerEnabled = _G.jackAutoBattle.Trainer ~= "Disabled"
+
+	-- Auto Battle + Trainer Target means trainer farming, not grass encounters.
+	if _G.autoBattleEnabled then
+		if _G.autoTrainerEnabled then
+			_G.F.setAutoEncounterEnabled(false)
+		else
+			_G.F.setAutoEncounterEnabled(true)
+		end
+		if _G.configUi and _G.configUi.autoEncounterToggle then
+			_G.F.setToggleUi(_G.configUi.autoEncounterToggle, _G.autoEncounterEnabled)
+		end
+	end
 end
 
 -- Legacy wrappers kept for encounter automation.
@@ -1141,12 +1153,19 @@ end
 _G.F.setAutoBattleEnabled = function(value)
 	_G.autoBattleEnabled = value and true or false
 
-	_G.F.setAutoEncounterEnabled(_G.autoBattleEnabled)
+	local trainerSelected = type(_G.jackAutoBattle) == "table"
+		and _G.jackAutoBattle.Trainer
+		and _G.jackAutoBattle.Trainer ~= "Disabled"
+
+	-- Wild grass only when Auto Battle is on and no Trainer Target is selected.
+	-- Trainer mode uses doTrainerBattle via the always-on trainer tick instead.
 	if _G.autoBattleEnabled then
+		_G.F.setAutoEncounterEnabled(not trainerSelected)
 		if _G.jackAutoBattle.Move == "Disabled" then
 			_G.F.jackSetAutoMove("Move 1")
 		end
 	else
+		_G.F.setAutoEncounterEnabled(false)
 		_G.F.jackSetAutoMove("Disabled")
 	end
 	_G.autoMoveOneEnabled = _G.jackAutoBattle.Move ~= "Disabled"
