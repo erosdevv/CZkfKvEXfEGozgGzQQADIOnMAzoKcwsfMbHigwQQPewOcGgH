@@ -462,8 +462,21 @@ _G.F.jackSyncTrainerDropdown = function(forceValue)
 	end
 end
 
+_G.F.jackIsNpcModel = function(model)
+	if model == nil then
+		return false
+	end
+	local modelType = type(model)
+	if modelType == "userdata" then
+		return true
+	end
+	-- Some executors report Instances via typeof only.
+	local ok, kind = pcall(typeof, model)
+	return ok and kind == "Instance"
+end
+
 _G.F.jackProcessTrainerNpc = function(npc)
-	if type(npc) ~= "table" or type(npc.model) ~= "userdata" then
+	if type(npc) ~= "table" or not _G.F.jackIsNpcModel(npc.model) then
 		return
 	end
 
@@ -478,17 +491,30 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		return
 	end
 
+	-- MrJack: read #Battle.Value as-is (no tonumber), fallback "Mrjack".
 	local battleId = nil
-	local battleValue = npc.model:FindFirstChild("#Battle")
-	if battleValue then
-		battleId = tonumber(battleValue.Value)
+	local okBattle, battleValue = pcall(function()
+		return npc.model:FindFirstChild("#Battle")
+	end)
+	if okBattle and battleValue then
+		local okValue, value = pcall(function()
+			return battleValue.Value
+		end)
+		if okValue and value ~= nil and value ~= "" then
+			battleId = value
+		end
 	end
-	if not battleId then
+	if battleId == nil then
 		battleId = "Mrjack"
 	end
 
 	local trainerData = battles[tostring(battleId)] or battles[battleId]
 	if type(trainerData) ~= "table" then
+		return
+	end
+
+	-- MrJack hard-requires RematchQuestion before mapping/list insert.
+	if not trainerData.RematchQuestion then
 		return
 	end
 
@@ -504,13 +530,12 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		battleKey = tostring(battleId),
 	}
 
+	-- MrJack insert gate: UV5 is Battle.setupScene (always truthy), so list
+	-- insert effectively requires regionData.BattleScene.
 	local regionData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "regionData") or nil
-	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene ~= nil
-	-- MrJack: require RematchQuestion AND BattleScene (not OR).
-	if trainerData.RematchQuestion and hasBattleScene then
-		if not table.find(_G.jackTrainerList, trainerName) then
-			table.insert(_G.jackTrainerList, trainerName)
-		end
+	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene and true or false
+	if hasBattleScene and not table.find(_G.jackTrainerList, trainerName) then
+		table.insert(_G.jackTrainerList, trainerName)
 	end
 end
 
@@ -541,29 +566,70 @@ _G.F.jackScanTrainerNpcs = function()
 		return
 	end
 
-	local previous = {}
-	for _, name in ipairs(_G.jackTrainerList) do
-		previous[name] = true
+	-- MrJack builds Names from chunk.battles and prunes stale dropdown entries.
+	local battleNames = {}
+	for _, battleData in pairs(battles) do
+		if type(battleData) == "table" then
+			local name = battleData.Name or battleData.name
+			if type(name) == "string" and name ~= "" then
+				battleNames[name] = true
+			end
+		end
 	end
 
-	_G.jackTrainerList = {}
-	for _, npc in ipairs(npcs) do
-		pcall(function()
-			_G.F.jackProcessTrainerNpc(npc)
-		end)
-	end
-
-	-- Drop configs for trainers no longer discovered this scan.
-	for name in pairs(previous) do
-		if not table.find(_G.jackTrainerList, name) then
+	for index = #_G.jackTrainerList, 1, -1 do
+		local name = _G.jackTrainerList[index]
+		if name ~= "Disabled" and not battleNames[name] then
+			table.remove(_G.jackTrainerList, index)
 			_G.jackTrainerConfigs[name] = nil
 			_G.jackTrainerBattleKeys[name] = nil
+		end
+	end
+
+	-- MrJack ForLooP iterates the full GetNPCs map (not ipairs-only).
+	local seen = {}
+	for _, npc in pairs(npcs) do
+		if type(npc) == "table" and not seen[npc] then
+			seen[npc] = true
+			pcall(function()
+				_G.F.jackProcessTrainerNpc(npc)
+			end)
 		end
 	end
 
 	table.sort(_G.jackTrainerList, function(a, b)
 		return tostring(a) < tostring(b)
 	end)
+end
+
+-- MrJack runs GetNPCs discovery on its own LooP, independent of Trainer Target.
+_G.F.jackRefreshTrainerTargetFromChunk = function()
+	if not _G.F.ensureP() then
+		return
+	end
+
+	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
+	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	local hasBattles = type(battles) == "table" and next(battles) ~= nil
+
+	if hasBattles then
+		_G.F.jackScanTrainerNpcs()
+	elseif #_G.jackTrainerList > 0 then
+		_G.jackTrainerList = {}
+		_G.jackTrainerConfigs = {}
+		_G.jackTrainerBattleKeys = {}
+	end
+
+	local signature = _G.F.getJackTrainerListSignature()
+	if signature ~= _G.jackLastTrainerListSignature then
+		_G.jackLastTrainerListSignature = signature
+		local forceValue = nil
+		if #_G.jackTrainerList == 0 then
+			forceValue = "Disabled"
+		end
+		_G.F.jackSyncTrainerDropdown(forceValue)
+	end
 end
 
 _G.F.jackInstallDoTrainerBattleHook = function()
@@ -843,26 +909,11 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false
 	end
 
+	-- Discovery/sync is owned by jackRefreshTrainerTargetFromChunk (always-on loop).
 	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
 	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
 	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	local hasBattles = type(battles) == "table" and next(battles) ~= nil
-
-	if hasBattles then
-		_G.F.jackScanTrainerNpcs()
-		local signature = _G.F.getJackTrainerListSignature()
-		if signature ~= _G.jackLastTrainerListSignature then
-			_G.jackLastTrainerListSignature = signature
-			_G.F.jackSyncTrainerDropdown()
-		end
-	else
-		if #_G.jackTrainerList > 0 then
-			_G.jackTrainerList = {}
-			_G.jackTrainerConfigs = {}
-			_G.jackTrainerBattleKeys = {}
-			_G.jackLastTrainerListSignature = ""
-			_G.F.jackSyncTrainerDropdown("Disabled")
-		end
+	if type(battles) ~= "table" or next(battles) == nil then
 		return false
 	end
 
@@ -877,14 +928,22 @@ _G.F.jackRunAutoTrainerTick = function()
 
 	local opponentBaseNPC = config.opponentBaseNPC
 	local opponentModel = type(opponentBaseNPC) == "table" and opponentBaseNPC.model or nil
-	if type(opponentModel) ~= "userdata" or not opponentModel:IsDescendantOf(workspace) then
+	if not _G.F.jackIsNpcModel(opponentModel) then
+		return false, "Trainer NPC is not nearby."
+	end
+	local inWorkspace = false
+	pcall(function()
+		inWorkspace = opponentModel:IsDescendantOf(workspace)
+	end)
+	if not inWorkspace then
 		return false, "Trainer NPC is not nearby."
 	end
 
 	local battleKey = _G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer]
-	if battleKey and type(battles) == "table" and not battles[battleKey] and not battles[tonumber(battleKey)] then
+	if battleKey and not battles[battleKey] and not battles[tonumber(battleKey)] then
 		table.remove(_G.jackTrainerList, table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer))
 		_G.jackTrainerConfigs[_G.jackAutoBattle.Trainer] = nil
+		_G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer] = nil
 		_G.F.jackSyncTrainerDropdown("Disabled")
 		return false, "Trainer battle data left this area."
 	end
@@ -948,6 +1007,14 @@ _G.F.jackStartBattleLoops = function()
 	end
 
 	_G.jackBattleLoopsStarted = true
+
+	-- MrJack: continuous GetNPCs trainer discovery, even while Target is Disabled.
+	task.spawn(function()
+		while _G.uiAlive do
+			pcall(_G.F.jackRefreshTrainerTargetFromChunk)
+			task.wait(0.25)
+		end
+	end)
 
 	task.spawn(function()
 		while _G.uiAlive do

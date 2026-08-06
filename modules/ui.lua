@@ -482,7 +482,7 @@ _G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
 	end,
 })
 
-_G.TrainersTab:AddLabel("Trainer list fills automatically when you enter an area with trainers.")
+_G.TrainersTab:AddLabel("Trainer list refreshes from chunk NPCs automatically (MrJack-style).")
 
 
 _G.RallyTab:AddSection({ Name = "Rally" })

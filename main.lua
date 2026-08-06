@@ -158,10 +158,8 @@ task.defer(function()
 			_G.F.syncJackMiscSettings()
 			_G.F.installJackStyleGameplayHooks()
 			_G.F.jackInstallDoTrainerBattleHook()
-			_G.F.jackScanTrainerNpcs()
-			_G.jackLastTrainerListSignature = _G.F.getJackTrainerListSignature()
-			_G.F.jackSyncTrainerDropdown()
 			_G.F.jackStartBattleLoops()
+			pcall(_G.F.jackRefreshTrainerTargetFromChunk)
 			break
 		end
 		task.wait(0.5)
