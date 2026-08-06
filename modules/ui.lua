@@ -156,6 +156,31 @@ _G.configUi.stopOnWispToggle = _G.EncountersTab:AddToggle({
 	end
 })
 
+_G.EncountersTab:AddSection({ Name = "Wild Move Helpers" })
+
+_G.configUi.useSpareToggle = _G.EncountersTab:AddToggle({
+	Name = "Use Spare",
+	Default = _G.useSpareEnabled,
+	Color = Color3.fromRGB(120, 220, 200),
+	Callback = function(value)
+		_G.useSpareEnabled = value and true or false
+	end
+})
+
+local corruptMoveOptions = { "Disabled" }
+for slot = 1, 4 do
+	table.insert(corruptMoveOptions, "Move " .. tostring(slot))
+end
+
+_G.configUi.corruptMoveDropdown = _G.EncountersTab:AddDropdown({
+	Name = "Corrupt Move",
+	Default = _G.corruptMove,
+	Options = corruptMoveOptions,
+	Callback = function(value)
+		_G.corruptMove = tostring(value or "Disabled")
+	end
+})
+
 _G.HuntsTab:AddSection({ Name = "Static Hunts" })
 
 _G.configUi.autoStaticToggle = _G.HuntsTab:AddToggle({
@@ -347,6 +372,30 @@ _G.configUi.disableShowProgressToggle = _G.BattleTab:AddToggle({
 		_G.disableShowProgressEnabled = value and true or false
 		_G.F.syncJackMiscSettings()
 		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.configUi.ignoreNpcBattleToggle = _G.BattleTab:AddToggle({
+	Name = "Ignore NPC Battle",
+	Default = _G.ignoreNpcBattleEnabled,
+	Color = Color3.fromRGB(255, 150, 90),
+	Callback = function(value)
+		_G.ignoreNpcBattleEnabled = value and true or false
+		_G.jackIgnoreNpcSession = {}
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.BattleTab:AddButton({
+	Name = "End Battle",
+	Icon = "x",
+	Callback = function()
+		local ok, reason = _G.F.endCurrentBattleForce()
+		_G.OrionLib:MakeNotification({
+			Name = "End Battle",
+			Content = ok and "Battle force-ended." or tostring(reason),
+			Time = ok and 3 or 5
+		})
 	end
 })
 
