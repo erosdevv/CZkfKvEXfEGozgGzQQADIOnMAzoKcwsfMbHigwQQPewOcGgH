@@ -1,0 +1,2005 @@
+-- ui.lua
+-- Orion window, tabs, and background service loops.
+_G.Window = _G.OrionLib:MakeWindow({
+	Name = "LLSPLOIT",
+	HidePremium = true,
+	SaveConfig = false,
+	IntroEnabled = false,
+	CloseCallback = function()
+		_G.uiAlive = false
+		_G.F.disableAllFeatures()
+	end
+})
+
+print("[LLSPLOIT] UI ready")
+__llsploitBootNotify("Loaded. Press RightShift if hidden.")
+pcall(function()
+	_G.OrionLib:MakeNotification({
+		Name = "LLSPLOIT",
+		Content = "Loaded successfully. Press RightShift if the window is hidden.",
+		Time = 4
+	})
+end)
+
+_G.OverviewTab = _G.Window:MakeTab({ Name = "Overview", Icon = "layout-dashboard" })
+_G.EncountersTab = _G.Window:MakeTab({ Name = "Encounters", Icon = "sparkles" })
+_G.HuntsTab = _G.Window:MakeTab({ Name = "Hunts", Icon = "crosshair" })
+_G.BattleTab = _G.Window:MakeTab({ Name = "Battle", Icon = "swords" })
+_G.TrainersTab = _G.Window:MakeTab({ Name = "Trainers", Icon = "user-check" })
+_G.RallyTab = _G.Window:MakeTab({ Name = "Rally", Icon = "users" })
+_G.StorageTab = _G.Window:MakeTab({ Name = "Storage", Icon = "archive" })
+_G.FishingTab = _G.Window:MakeTab({ Name = "Fishing", Icon = "waves" })
+_G.FossilReviveTab = _G.Window:MakeTab({ Name = "Fossil Revive", Icon = "bone" })
+_G.MinigamesTab = _G.Window:MakeTab({ Name = "Minigames", Icon = "gamepad-2" })
+_G.ShopTab = _G.Window:MakeTab({ Name = "Shops", Icon = "shopping-bag" })
+_G.SettingsTab = _G.Window:MakeTab({ Name = "Settings", Icon = "settings" })
+
+-- Legacy aliases for automation modules that still reference older tab names.
+_G.DashboardTab = _G.OverviewTab
+_G.InformationTab = _G.OverviewTab
+_G.HuntingTab = _G.HuntsTab
+_G.StaticTab = _G.HuntsTab
+_G.CollectionTab = _G.StorageTab
+_G.ArcadeTab = _G.MinigamesTab
+_G.EggRainTab = _G.MinigamesTab
+_G.WorldTab = _G.FossilReviveTab
+
+local informationCurrencySection = _G.InformationTab:AddSection({ Name = "Currencies" })
+_G.informationLabels.money = informationCurrencySection:AddLabel("Money: N/A")
+_G.informationLabels.tix = informationCurrencySection:AddLabel("Tix: N/A")
+_G.informationLabels.bp = informationCurrencySection:AddLabel("BP: N/A")
+
+local informationStatusSection = _G.InformationTab:AddSection({ Name = "Status" })
+_G.informationLabels.status = informationStatusSection:AddLabel("Loaded: 0/3")
+informationStatusSection:AddButton({
+	Name = "Refresh Information",
+	Icon = "refresh-cw",
+	Callback = function()
+		_G.F.refreshInformationLabels()
+	end
+})
+_G.F.refreshInformationLabels()
+
+
+_G.EncountersTab:AddSection({ Name = "Wild Encounters" })
+
+_G.configUi.autoEncounterToggle = _G.EncountersTab:AddToggle({
+	Name = "Auto Encounter",
+	Default = _G.autoEncounterEnabled,
+	Color = Color3.fromRGB(0, 190, 180),
+	Callback = function(value)
+		_G.F.setAutoEncounterEnabled(value)
+	end
+})
+
+_G.EncountersTab:AddTextbox({
+	Name = "Target Loomian",
+	Default = _G.encounterTargetLoomian,
+	TextDisappear = false,
+	Callback = function(value)
+		_G.encounterTargetLoomian = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+	end
+})
+
+_G.configUi.encounterDelay = _G.EncountersTab:AddSlider({
+	Name = "Encounter Delay",
+	Min = 0.5,
+	Max = 6,
+	Default = _G.autoEncounterDelay,
+	Increment = 0.25,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoEncounterDelay = value
+	end
+})
+
+_G.EncountersTab:AddButton({
+	Name = "Start Encounter Now",
+	Icon = "zap",
+	Callback = function()
+		local started, reason = _G.F.startAutoEncounter()
+
+		if not started and reason then
+			_G.OrionLib:MakeNotification({
+				Name = "Auto Encounter",
+				Content = reason,
+				Time = 4
+			})
+		end
+	end
+})
+
+_G.EncountersTab:AddSection({ Name = "Capture Rules" })
+
+_G.configUi.autoCatchToggle = _G.EncountersTab:AddToggle({
+	Name = "Auto Catch",
+	Default = _G.autoCatchEnabled,
+	Color = Color3.fromRGB(255, 120, 180),
+	Callback = function(value)
+		_G.F.setAutoCatchEnabled(value)
+	end
+})
+
+_G.EncountersTab:AddTextbox({
+	Name = "Capture Disc",
+	Default = _G.autoCatchDisc,
+	TextDisappear = false,
+	Callback = function(value)
+		_G.autoCatchDisc = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+	end
+})
+
+_G.configUi.stopOnGleamingToggle = _G.EncountersTab:AddToggle({
+	Name = "Stop on Gleaming",
+	Default = _G.stopOnGleaming,
+	Color = Color3.fromRGB(255, 215, 90),
+	Callback = function(value)
+		_G.stopOnGleaming = value
+	end
+})
+
+_G.configUi.stopOnGammaToggle = _G.EncountersTab:AddToggle({
+	Name = "Stop on Gamma",
+	Default = _G.stopOnGamma,
+	Color = Color3.fromRGB(120, 220, 120),
+	Callback = function(value)
+		_G.stopOnGamma = value
+	end
+})
+
+_G.configUi.stopOnWispToggle = _G.EncountersTab:AddToggle({
+	Name = "Stop on Wisp",
+	Default = _G.stopOnWisp,
+	Color = Color3.fromRGB(180, 140, 255),
+	Callback = function(value)
+		_G.stopOnWisp = value
+	end
+})
+
+_G.HuntsTab:AddSection({ Name = "Static Hunts" })
+
+_G.configUi.autoStaticToggle = _G.HuntsTab:AddToggle({
+	Name = "Auto Static",
+	Default = StaticAutomation:isEnabled(),
+	Color = Color3.fromRGB(80, 185, 255),
+	Callback = function(value)
+		StaticAutomation:setEnabled(value)
+		if value and _G.arcerosAutoEnabled and _G.configUi.autoArcerosToggle then
+			_G.arcerosAutoEnabled = false
+			pcall(function()
+				_G.configUi.autoArcerosToggle:Set(false)
+			end)
+		end
+	end
+})
+StaticAutomation:attachToggle(_G.configUi.autoStaticToggle)
+StaticAutomation:attachStatsLabel(_G.HuntsTab:AddLabel("Soft Resets: 0"))
+
+_G.HuntsTab:AddTextbox({
+	Name = "Interact Target",
+	Default = _G.staticInteractTarget,
+	TextDisappear = false,
+	Callback = function(value)
+		_G.staticInteractTarget = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+	end
+})
+
+_G.HuntsTab:AddButton({
+	Name = "Interact Now",
+	Icon = "zap",
+	Callback = function()
+		local started, reason = StaticAutomation:startInteraction()
+		if not started and reason then
+			_G.OrionLib:MakeNotification({ Name = "Static", Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.HuntsTab:AddSection({ Name = "Beast Soft Resets" })
+
+_G.configUi.beastTargetDropdown = _G.HuntsTab:AddDropdown({
+	Name = "Beast",
+	Options = { "Arceros", "Glacadia" },
+	Default = _G.F.getSelectedBeastName(),
+	Callback = function(value)
+		if _G.BEAST_HUNTS[tostring(value)] then
+			_G.beastTarget = tostring(value)
+		end
+	end
+})
+
+_G.configUi.autoArcerosToggle = _G.HuntsTab:AddToggle({
+	Name = "Auto Beast Soft Reset",
+	Default = _G.arcerosAutoEnabled,
+	Color = Color3.fromRGB(255, 120, 60),
+	Callback = function(value)
+		_G.arcerosAutoEnabled = value and true or false
+		if value then
+			if StaticAutomation and StaticAutomation:isEnabled() and _G.configUi.autoStaticToggle then
+				StaticAutomation:setEnabled(false)
+				pcall(function()
+					_G.configUi.autoStaticToggle:Set(false)
+				end)
+			end
+		elseif StaticAutomation and not StaticAutomation:isEnabled() then
+			StaticAutomation:setEnabled(false)
+		end
+	end
+})
+
+_G.arcerosStatsLabel = _G.HuntsTab:AddLabel("Soft Resets: 0")
+
+_G.HuntsTab:AddButton({
+	Name = "Soft Reset Now",
+	Icon = "flame",
+	Callback = function()
+		local started, reason = StaticAutomation:startInteraction("arceros")
+		if not started and reason then
+			_G.OrionLib:MakeNotification({ Name = _G.F.getSelectedBeastName(), Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.HuntsTab:AddButton({
+	Name = "Walk to Soft Reset Trigger",
+	Icon = "footprints",
+	Callback = function()
+		if not StaticAutomation then
+			return
+		end
+
+		local walked, reason = StaticAutomation:walkToArcerosTrigger()
+		if not walked and reason then
+			_G.OrionLib:MakeNotification({ Name = _G.F.getSelectedBeastName(), Content = reason, Time = 4 })
+		elseif not _G.F.getSelectedBeastTrigger() then
+			_G.OrionLib:MakeNotification({
+				Name = _G.F.getSelectedBeastName(),
+				Content = "Soft reset trigger not found. Go to the Beasts of Judgement chamber first.",
+				Time = 4
+			})
+		end
+	end
+})
+
+_G.HuntsTab:AddButton({
+	Name = "Reset Stats",
+	Icon = "rotate-ccw",
+	Callback = function()
+		if StaticAutomation then
+			StaticAutomation:resetStats()
+		end
+	end
+})
+
+
+_G.BattleTab:AddSection({ Name = "Auto Battle" })
+
+_G.configUi.autoBattleToggle = _G.BattleTab:AddToggle({
+	Name = "Auto Battle",
+	Default = _G.autoBattleEnabled,
+	Color = Color3.fromRGB(255, 115, 120),
+	Callback = function(value)
+		_G.F.setAutoBattleEnabled(value)
+	end
+})
+
+
+_G.BattleTab:AddSection({ Name = "Battle Speed" })
+
+_G.configUi.fastForwardToggle = _G.BattleTab:AddToggle({
+	Name = "Fast Battle",
+	Default = _G.fastForwardEnabled,
+	Color = Color3.fromRGB(255, 170, 70),
+	Callback = function(value)
+		_G.F.setFastBattleEnabled(value)
+	end
+})
+
+_G.BattleTab:AddSection({ Name = "Prompt Handling" })
+
+_G.configUi.skipDialogueToggle = _G.BattleTab:AddToggle({
+	Name = "Skip Dialogue",
+	Default = _G.skipDialogueEnabled,
+	Color = Color3.fromRGB(90, 200, 255),
+	Callback = function(value)
+		_G.skipDialogueEnabled = value and true or false
+	end
+})
+
+_G.configUi.denyReassignMoveToggle = _G.BattleTab:AddToggle({
+	Name = "Deny Reassign Move",
+	Default = _G.denyReassignMoveEnabled,
+	Color = Color3.fromRGB(255, 180, 80),
+	Callback = function(value)
+		_G.denyReassignMoveEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.configUi.denySwitchRequestToggle = _G.BattleTab:AddToggle({
+	Name = "Deny Switch Request",
+	Default = _G.denySwitchRequestEnabled,
+	Color = Color3.fromRGB(255, 140, 140),
+	Callback = function(value)
+		_G.denySwitchRequestEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.configUi.denyNicknameToggle = _G.BattleTab:AddToggle({
+	Name = "Deny Nickname",
+	Default = _G.denyNicknameEnabled,
+	Color = Color3.fromRGB(180, 150, 255),
+	Callback = function(value)
+		_G.denyNicknameEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.configUi.disableShowProgressToggle = _G.BattleTab:AddToggle({
+	Name = "Disable Show Progress",
+	Default = _G.disableShowProgressEnabled,
+	Color = Color3.fromRGB(120, 220, 170),
+	Callback = function(value)
+		_G.disableShowProgressEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
+_G.BattleTab:AddButton({
+	Name = "Skip Battle Theater Puzzles",
+	Icon = "skip-forward",
+	Callback = function()
+		local ok, reason = _G.F.skipBattleTheaterPuzzles()
+		_G.OrionLib:MakeNotification({
+			Name = "Battle Theater",
+			Content = ok and "Puzzle skip action sent." or tostring(reason),
+			Time = ok and 3 or 5
+		})
+	end
+})
+
+
+local jackMoveOptions = { "Disabled" }
+for slot = 1, 4 do
+	table.insert(jackMoveOptions, "Move " .. tostring(slot))
+end
+
+_G.TrainersTab:AddSection({ Name = "Auto Move" })
+
+_G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
+	Name = "Auto Move",
+	Default = _G.jackAutoBattle.Move,
+	Options = jackMoveOptions,
+	Callback = function(value)
+		if _G.jackSyncingDropdownUi then
+			return
+		end
+		_G.F.jackSetAutoMove(value)
+	end,
+})
+
+_G.TrainersTab:AddSection({ Name = "Auto Battle" })
+
+_G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
+	Name = "Trainer",
+	Default = _G.jackAutoBattle.Trainer,
+	Options = _G.jackTrainerDropdownOptions,
+	Callback = function(value)
+		if _G.jackSyncingDropdownUi then
+			return
+		end
+		_G.F.jackSetAutoTrainer(value)
+	end,
+})
+
+_G.TrainersTab:AddLabel("Trainer list fills automatically when you enter an area with trainers.")
+
+
+_G.RallyTab:AddSection({ Name = "Rally" })
+
+_G.configUi.autoRallyToggle = _G.RallyTab:AddToggle({
+	Name = "Auto Rally",
+	Default = _G.autoRallyEnabled,
+	Color = Color3.fromRGB(90, 220, 145),
+	Callback = function(value)
+		_G.autoRallyEnabled = value
+		if value then
+			_G.lastRallyActionText = "Auto Rally enabled."
+			_G.F.refreshRallyUI()
+		end
+	end
+})
+
+_G.rallyStatsLabel = _G.RallyTab:AddLabel("Kept: 0 | Released: 0")
+_G.rallyStatusLabel = _G.RallyTab:AddLabel("Idle")
+
+_G.configUi.keepGleamingToggle = _G.RallyTab:AddToggle({ Name = "Keep Gleaming", Default = _G.keepGleaming, Color = Color3.fromRGB(255, 215, 90), Callback = function(v) _G.keepGleaming = v end })
+_G.configUi.keepSecretAbilityToggle = _G.RallyTab:AddToggle({ Name = "Keep Secret Ability", Default = _G.keepSecretAbility, Color = Color3.fromRGB(149, 88, 204), Callback = function(v) _G.keepSecretAbility = v end })
+_G.configUi.keepAllToggle = _G.RallyTab:AddToggle({ Name = "Keep All (no releasing)", Default = _G.keepAll, Color = Color3.fromRGB(255, 120, 120), Callback = function(v) _G.keepAll = v end })
+
+_G.RallyTab:AddTextbox({
+	Name = "Always Keep (names, comma-separated)",
+	Default = _G.alwaysKeepText,
+	TextDisappear = false,
+	Callback = function(value) _G.F.setAlwaysKeepList(value) end
+})
+
+_G.configUi.rallyDelay = _G.RallyTab:AddSlider({
+	Name = "Rally Delay",
+	Min = 0.5, Max = 10, Increment = 0.5,
+	Default = _G.rallyDelay, ValueName = "s",
+	Callback = function(value) _G.rallyDelay = value end
+})
+
+_G.RallyTab:AddButton({
+	Name = "Handle Rally Now",
+	Icon = "zap",
+	Callback = function()
+		local didWork, reason = _G.F.runAutoRally()
+		if not didWork and reason then
+			_G.OrionLib:MakeNotification({ Name = "Auto Rally", Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.RallyTab:AddButton({
+	Name = "Open Rally Menu",
+	Icon = "menu",
+	Callback = function()
+		local opened, reason = _G.F.openRallyMenu()
+		if not opened and reason then
+			_G.OrionLib:MakeNotification({ Name = "Rally", Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.RallyTab:AddButton({
+	Name = "Open Rally Team",
+	Icon = "users",
+	Callback = function()
+		local opened, reason = _G.F.openRallyTeam()
+		if not opened and reason then
+			_G.OrionLib:MakeNotification({ Name = "Rally Team", Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.RallyTab:AddButton({
+	Name = "Open Rallied",
+	Icon = "package-check",
+	Callback = function()
+		local opened, reason = _G.F.openRallied()
+		if not opened and reason then
+			_G.OrionLib:MakeNotification({ Name = "Rallied", Content = reason, Time = 4 })
+		end
+	end
+})
+
+_G.RallyTab:AddButton({
+	Name = "Reset Rally Stats",
+	Icon = "refresh-cw",
+	Callback = function()
+		_G.rallyKept = 0
+		_G.rallyReleased = 0
+		_G.lastRallyActionText = "Stats reset."
+		_G.F.refreshRallyUI()
+	end
+})
+
+
+local informationBoonarySection = _G.StorageTab:AddSection({ Name = "Boonary Storage" })
+_G.autoBoonaryStatusLabel = informationBoonarySection:AddLabel("Idle")
+
+_G.configUi.autoBoonaryToggle = informationBoonarySection:AddToggle({
+	Name = "Auto Boonary at Tix Cap",
+	Default = _G.autoBoonaryEnabled,
+	Color = Color3.fromRGB(255, 190, 85),
+	Callback = function(value)
+		_G.F.setAutoBoonaryEnabled(value)
+	end
+})
+
+informationBoonarySection:AddTextbox({
+	Name = "Tix Threshold",
+	Default = tostring(_G.autoBoonaryTixThreshold),
+	TextDisappear = false,
+	Callback = function(value)
+		local parsed = tonumber((tostring(value or ""):gsub(",", "")))
+		if parsed and parsed > 0 then
+			_G.autoBoonaryTixThreshold = math.floor(parsed)
+		else
+			_G.OrionLib:MakeNotification({ Name = "Auto Boonary", Content = "Type a numeric Tix threshold.", Time = 4 })
+		end
+	end
+})
+
+informationBoonarySection:AddTextbox({
+	Name = "PC Group",
+	Default = tostring(_G.autoBoonaryGroup),
+	TextDisappear = false,
+	Callback = function(value)
+		local parsed = tonumber(value)
+		if parsed and parsed > 0 then
+			_G.autoBoonaryGroup = math.floor(parsed)
+		else
+			_G.OrionLib:MakeNotification({ Name = "Auto Boonary", Content = "Type a numeric PC group.", Time = 4 })
+		end
+	end
+})
+
+informationBoonarySection:AddButton({
+	Name = "Max Buy Boonary",
+	Icon = "shopping-cart",
+	Callback = function()
+		task.spawn(function()
+			local ok, reason = _G.F.purchaseMaxArcadeBoonarys()
+			if ok then
+				_G.OrionLib:MakeNotification({ Name = "Max Buy Boonary", Content = "Purchase succeeded.", Time = 4 })
+			else
+				_G.OrionLib:MakeNotification({ Name = "Max Buy Boonary", Content = tostring(reason), Time = 6 })
+			end
+		end)
+	end
+})
+
+informationBoonarySection:AddButton({
+	Name = "Run Boonary Cycle Now",
+	Icon = "play",
+	Callback = function()
+		task.spawn(function()
+			local ok, reason = _G.F.runAutoBoonaryCycle()
+			if not ok and reason then
+				_G.OrionLib:MakeNotification({ Name = "Auto Boonary", Content = tostring(reason), Time = 5 })
+			end
+		end)
+	end
+})
+
+informationBoonarySection:AddButton({
+	Name = "Release Non-Gleam Boonarys Now",
+	Icon = "trash",
+	Callback = function()
+		task.spawn(function()
+			local callOk, ok, reason = pcall(function()
+				return _G.F.cleanBoonaryPcBoxes(false)
+			end)
+			if not callOk then
+				_G.OrionLib:MakeNotification({ Name = "Boonary Sweep", Content = tostring(ok), Time = 6 })
+				return
+			end
+			_G.OrionLib:MakeNotification({ Name = "Boonary Sweep", Content = tostring(reason), Time = 6 })
+		end)
+	end
+})
+
+informationBoonarySection:AddButton({
+	Name = "Print Boonary Preview",
+	Icon = "terminal",
+	Callback = function()
+		task.spawn(function()
+			local callOk, ok, reason = pcall(function()
+				-- Dry-run the direct PC session sweep first; fall back to the
+				-- legacy heuristic preview if no session is available.
+				local sweepOk, sweepReason = _G.F.cleanBoonaryPcBoxes(true)
+				if sweepOk then
+					return sweepOk, sweepReason
+				end
+				print("[Auto Boonary Preview] PC session unavailable (" .. tostring(sweepReason) .. "); using legacy scan.")
+				return _G.F.printBoonaryStoragePreview(_G.autoBoonaryGroup)
+			end)
+
+			if not callOk then
+				print("[Auto Boonary Preview] ERROR: " .. tostring(ok))
+				_G.F.setAutoBoonaryStatus("Preview error: " .. tostring(ok))
+				_G.OrionLib:MakeNotification({ Name = "Auto Boonary Preview", Content = tostring(ok), Time = 5 })
+				return
+			end
+
+			if not ok and reason then
+				_G.OrionLib:MakeNotification({ Name = "Auto Boonary Preview", Content = tostring(reason), Time = 5 })
+			end
+		end)
+	end
+})
+
+
+local collectionUtilitySection = _G.StorageTab:AddSection({ Name = "Party Items & PC" })
+
+_G.configUi.autoHealToggle = collectionUtilitySection:AddToggle({
+	Name = "Auto Heal",
+	Default = _G.autoHealEnabled,
+	Color = Color3.fromRGB(120, 255, 160),
+	Callback = function(value)
+		_G.autoHealEnabled = value and true or false
+	end
+})
+
+_G.configUi.autoHealDelay = collectionUtilitySection:AddSlider({
+	Name = "Auto Heal Delay",
+	Min = 3,
+	Max = 60,
+	Increment = 1,
+	Default = _G.autoHealDelay,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoHealDelay = value
+	end
+})
+
+collectionUtilitySection:AddButton({
+	Name = "Heal Once",
+	Icon = "heart-pulse",
+	Callback = function()
+		local ok, reason = _G.F.runAutoHealOnce(true)
+		_G.OrionLib:MakeNotification({
+			Name = "Auto Heal",
+			Content = ok and "Heal action sent." or tostring(reason),
+			Time = ok and 3 or 5
+		})
+	end
+})
+
+_G.configUi.activeRepellentToggle = collectionUtilitySection:AddToggle({
+	Name = "Active Repellent",
+	Default = _G.activeRepellentEnabled,
+	Color = Color3.fromRGB(255, 205, 90),
+	Callback = function(value)
+		_G.activeRepellentEnabled = value and true or false
+		if _G.activeRepellentEnabled then
+			local ok, reason = _G.F.useActiveRepellentOnce(true)
+			pcall(function()
+				_G.OrionLib:MakeNotification({
+					Name = "Active Repellent",
+					Content = ok and tostring(reason or "Repellent enabled.") or tostring(reason),
+					Time = ok and 3 or 5,
+				})
+			end)
+			if not ok then
+				warn("[Active Repellent] " .. tostring(reason))
+			end
+		end
+	end
+})
+
+_G.configUi.activeRepellentDelay = collectionUtilitySection:AddSlider({
+	Name = "Repellent Refresh",
+	Min = 10,
+	Max = 120,
+	Increment = 5,
+	Default = _G.activeRepellentDelay,
+	ValueName = "s",
+	Callback = function(value)
+		_G.activeRepellentDelay = value
+	end
+})
+
+collectionUtilitySection:AddButton({
+	Name = "Use Repellent Once",
+	Icon = "spray-can",
+	Callback = function()
+		local ok, reason = _G.F.useActiveRepellentOnce(true)
+		_G.OrionLib:MakeNotification({
+			Name = "Active Repellent",
+			Content = ok and tostring(reason or "Repellent action sent.") or tostring(reason),
+			Time = ok and 3 or 5
+		})
+	end
+})
+
+collectionUtilitySection:AddButton({
+	Name = "Open PC",
+	Icon = "archive",
+	Callback = function()
+		local ok, reason = _G.F.openPcMenu()
+		if not ok then
+			_G.OrionLib:MakeNotification({ Name = "Open PC", Content = tostring(reason), Time = 5 })
+		end
+	end
+})
+
+
+_G.FishingTab:AddSection({ Name = "Auto Fishing" })
+FishingAutomation:attachUi(_G.FishingTab)
+
+
+_G.FishingTab:AddSection({ Name = "Goppie Tracking" })
+
+_G.goppieFormesTextbox = _G.FishingTab:AddTextbox({
+	Name = "Goppie Formes",
+	Default = _G.F.getGoppieFormesText(),
+	TextDisappear = false,
+	Callback = function(value)
+		_G.F.setGoppieFormesFromText(value)
+	end
+})
+
+task.defer(function()
+	_G.F.syncGoppieFormesTextbox()
+end)
+
+
+-- Status & scan --------------------------------------------------------------
+local fossilStatusSection = _G.FossilReviveTab:AddSection({ Name = "Fossil Revival — Status" })
+
+_G.fossilStatusLabel = fossilStatusSection:AddLabel("Status: Idle")
+_G.fossilStatsLabel = fossilStatusSection:AddLabel("Batches: 0 | Revived: 0 | Last Queued: 0")
+_G.fossilMachineLabel = fossilStatusSection:AddLabel("Petrolith Table: searching...")
+_G.fossilScanLabel = fossilStatusSection:AddLabel("Bag: not scanned yet")
+
+fossilStatusSection:AddButton({
+	Name = "Scan Fossil Bag",
+	Icon = "search",
+	Callback = function()
+		local ok, reason = _G.F.scanFossilBag()
+		if not ok and reason then
+			_G.OrionLib:MakeNotification({
+				Name = "Fossil Scan",
+				Content = reason,
+				Time = 5,
+			})
+		end
+	end,
+})
+
+-- Automation & actions -------------------------------------------------------
+local fossilRunSection = _G.FossilReviveTab:AddSection({ Name = "Automation & Actions" })
+
+_G.configUi.autoFossilToggle = fossilRunSection:AddToggle({
+	Name = "Auto Fossil",
+	Default = _G.autoFossilEnabled,
+	Color = Color3.fromRGB(80, 185, 255),
+	Callback = function(value)
+		_G.autoFossilEnabled = value
+		_G.nextAutoFossilAt = 0
+
+		if value then
+			_G.F.setFossilStatus("Auto Fossil enabled.")
+		else
+			_G.F.setFossilStatus("Auto Fossil disabled.")
+		end
+	end
+})
+
+_G.configUi.autoFossilDelay = fossilRunSection:AddSlider({
+	Name = "Fossil Loop Delay",
+	Min = 1,
+	Max = 30,
+	Increment = 0.5,
+	Default = _G.autoFossilDelay,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoFossilDelay = value
+	end
+})
+
+fossilRunSection:AddButton({
+	Name = "Revive Fossils Now",
+	Icon = "zap",
+	Callback = function()
+		local success, reason = _G.F.runAutoFossil()
+		if not success and reason then
+			_G.OrionLib:MakeNotification({
+				Name = "Auto Fossil",
+				Content = reason,
+				Time = 5,
+			})
+		end
+	end
+})
+
+fossilRunSection:AddButton({
+	Name = "Clean Fossil PC Now",
+	Icon = "trash-2",
+	Callback = function()
+		local ok, reason = _G.F.cleanFossilRevivalPcBoxes(false)
+		_G.OrionLib:MakeNotification({
+			Name = "Fossil Cleanup",
+			Content = ok and tostring(reason) or tostring(reason),
+			Time = ok and 6 or 5,
+		})
+	end,
+})
+
+fossilRunSection:AddButton({
+	Name = "Reset Fossil Stats",
+	Icon = "refresh-cw",
+	Callback = function()
+		_G.totalFossilBatches = 0
+		_G.totalFossilRevived = 0
+		_G.lastFossilQueuedCount = 0
+		_G.F.refreshFossilStats()
+		_G.F.setFossilStatus("Stats reset.")
+	end
+})
+
+-- Revive targets -------------------------------------------------------------
+local fossilTargetSection = _G.FossilReviveTab:AddSection({ Name = "Revive Targets" })
+
+_G.fossilTargetDropdown = fossilTargetSection:AddDropdown({
+	Name = "Auto Revive Target",
+	Default = _G.autoFossilReviveTarget,
+	Options = _G.F.buildFossilTargetDropdownOptions(),
+	Callback = function(value)
+		if _G.jackSyncingDropdownUi then
+			return
+		end
+		_G.autoFossilReviveTarget = value
+	end,
+})
+_G.configUi.fossilTargetDropdown = _G.fossilTargetDropdown
+
+fossilTargetSection:AddLabel("Pick one Loomian above to revive only that one, or leave it on \"All Loomians\" and use the toggles below to choose which fossils to revive.")
+
+_G.F.getPetrolithReviveCatalog()
+_G.configUi.fossilTargetToggles = _G.configUi.fossilTargetToggles or {}
+for _, entry in ipairs(_G.F.getPetrolithReviveCatalog()) do
+	_G.configUi.fossilTargetToggles[entry.id] = fossilTargetSection:AddToggle({
+		Name = "Revive " .. entry.loomian .. " (" .. entry.fossil .. ")",
+		Default = _G.autoFossilTargetEnabled[entry.id] ~= false,
+		Color = Color3.fromRGB(120, 200, 255),
+		Callback = function(value)
+			_G.autoFossilTargetEnabled[entry.id] = value and true or false
+		end,
+	})
+end
+
+-- Revive options -------------------------------------------------------------
+local fossilOptionsSection = _G.FossilReviveTab:AddSection({ Name = "Revive Options" })
+
+_G.configUi.autoFossilAutoReleaseToggle = fossilOptionsSection:AddToggle({
+	Name = "Auto-Release Non Special",
+	Default = _G.autoFossilAutoRelease,
+	Color = Color3.fromRGB(255, 120, 120),
+	Callback = function(value)
+		_G.autoFossilAutoRelease = value and true or false
+	end,
+})
+
+_G.configUi.autoFossilKeepSecretAbilityToggle = fossilOptionsSection:AddToggle({
+	Name = "Keep Secret Ability",
+	Default = _G.autoFossilKeepSecretAbility,
+	Color = Color3.fromRGB(149, 88, 204),
+	Callback = function(value)
+		_G.autoFossilKeepSecretAbility = value and true or false
+	end,
+})
+
+fossilOptionsSection:AddLabel("Keeps Gleaming and Gamma automatically. Release sweep follows Boonary-style PC cleanup.")
+
+_G.F.refreshFossilStats()
+_G.F.refreshPetrolithTableLabel()
+_G.F.syncFossilTargetDropdown()
+
+task.defer(function()
+	for _ = 1, 20 do
+		if type(_G.F) == "table" and _G.F.ensureP() then
+			pcall(_G.F.scanFossilBag)
+			break
+		end
+		task.wait(0.5)
+	end
+end)
+
+
+_G.MinigamesTab:AddSection({ Name = "Disc Drop" })
+ArcadeAutomation:attachUi(_G.MinigamesTab)
+
+
+_G.MinigamesTab:AddSection({ Name = "Egg Rain" })
+_G.eggRainStatusLabel = _G.MinigamesTab:AddLabel("Status: Idle")
+
+_G.configUi.autoEggRainToggle = _G.MinigamesTab:AddToggle({
+	Name = "Auto Egg Rain",
+	Default = _G.autoEggRainEnabled,
+	Color = Color3.fromRGB(255, 215, 90),
+	Callback = function(value)
+		_G.autoEggRainEnabled = value
+		_G.F.setEggRainStatus(value and "Auto Egg Rain enabled." or "Auto Egg Rain disabled.")
+	end
+})
+
+_G.configUi.autoEggRainDelay = _G.MinigamesTab:AddSlider({
+	Name = "Bring Delay",
+	Min = 0.1,
+	Max = 3,
+	Increment = 0.1,
+	Default = _G.autoEggRainDelay,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoEggRainDelay = value
+	end
+})
+
+_G.MinigamesTab:AddButton({
+	Name = "Bring Egg Once",
+	Icon = "zap",
+	Callback = function()
+		local success, reason = _G.F.runEggRainBringOnce()
+		if not success and reason then
+			_G.OrionLib:MakeNotification({
+				Name = "Egg Rain",
+				Content = reason,
+				Time = 4,
+			})
+		end
+	end
+})
+
+
+_G.ShopTab:AddSection({ Name = "Open Shops" })
+
+for _, shopInfo in ipairs(_G.SHOP_DEFINITIONS) do
+	local shopId = shopInfo.Id
+	local shopLabel = shopInfo.Label
+
+	_G.ShopTab:AddButton({
+		Name = shopLabel,
+		Icon = "shopping-bag",
+		Callback = function()
+			local opened, reason = _G.F.openShop(shopId, shopLabel)
+			if not opened and reason then
+				_G.OrionLib:MakeNotification({
+					Name = "Shop",
+					Content = tostring(reason),
+					Time = 4,
+				})
+			end
+		end
+	})
+end
+
+-- Build each Settings element in isolation. If any one element's construction
+-- throws at runtime (e.g. an OrionLib event-hookup hitting a thread capability
+-- error), the failure must stay contained to that element and never abort the
+-- rest of the tab -- otherwise the essential Config/Unload controls below get
+-- silently dropped along with it.
+local function settingsBuild(label, builder)
+	local ok, err = pcall(builder)
+	if not ok then
+		warn("[LLSPLOIT] Settings element '" .. tostring(label) .. "' failed to build: " .. tostring(err))
+	end
+end
+
+local settingsMovementSection
+settingsBuild("Movement section", function()
+	settingsMovementSection = _G.SettingsTab:AddSection({ Name = "Movement Utilities" })
+end)
+
+if settingsMovementSection then
+	settingsBuild("Ctrl + Click Teleport", function()
+		_G.configUi.ctrlClickTpToggle = settingsMovementSection:AddToggle({
+			Name = "Ctrl + Click Teleport",
+			Default = _G.ctrlClickTpEnabled,
+			Color = Color3.fromRGB(120, 200, 255),
+			Callback = function(value)
+				_G.F.setCtrlClickTpEnabled(value)
+			end
+		})
+	end)
+
+	settingsBuild("No Unstuck Cooldown", function()
+		_G.configUi.noUnstuckCooldownToggle = settingsMovementSection:AddToggle({
+			Name = "No Unstuck Cooldown",
+			Default = _G.noUnstuckCooldownEnabled,
+			Color = Color3.fromRGB(255, 190, 90),
+			Callback = function(value)
+				_G.noUnstuckCooldownEnabled = value and true or false
+				if _G.noUnstuckCooldownEnabled then
+					_G.F.applyNoUnstuckCooldown()
+				else
+					_G.F.restoreJackStyleGameplayHooks()
+				end
+			end
+		})
+	end)
+end
+
+local settingsGeneralSection
+settingsBuild("General section", function()
+	settingsGeneralSection = _G.SettingsTab:AddSection({ Name = "Safety" })
+end)
+
+if settingsGeneralSection then
+	settingsBuild("Anti AFK", function()
+		_G.configUi.antiAfkToggle = settingsGeneralSection:AddToggle({
+			Name = "Anti AFK",
+			Default = _G.antiAfkEnabled,
+			Color = Color3.fromRGB(120, 255, 160),
+			Callback = function(value)
+				_G.F.setAntiAfkEnabled(value)
+			end
+		})
+	end)
+
+	-- Deliberately not saved to config: silently restoring a no-save state on the
+	-- next injection could cost the user hours of progress.
+	settingsBuild("Disable Saving", function()
+		settingsGeneralSection:AddToggle({
+			Name = "Disable Saving",
+			Default = _G.savingDisabled,
+			Color = Color3.fromRGB(255, 150, 120),
+			Callback = function(value)
+				local ok, reason = _G.F.setSavingDisabled(value)
+				if not ok and reason then
+					pcall(function()
+						_G.OrionLib:MakeNotification({
+							Name = "Disable Saving",
+							Content = reason,
+							Time = 4
+						})
+					end)
+				end
+			end
+		})
+	end)
+end
+
+local settingsServerSection
+settingsBuild("Server section", function()
+	settingsServerSection = _G.SettingsTab:AddSection({ Name = "Server Hop" })
+end)
+
+if settingsServerSection then
+	settingsBuild("Rejoin", function()
+		settingsServerSection:AddButton({
+			Name = "Rejoin",
+			Icon = "refresh-cw",
+			Callback = function()
+				local ok, reason = _G.F.rejoinServer()
+				if not ok and reason then
+					_G.OrionLib:MakeNotification({ Name = "Rejoin", Content = tostring(reason), Time = 5 })
+				end
+			end
+		})
+	end)
+
+	settingsBuild("Switch Server", function()
+		settingsServerSection:AddButton({
+			Name = "Switch Server",
+			Icon = "shuffle",
+			Callback = function()
+				local ok, reason = _G.F.switchServer(false)
+				if not ok and reason then
+					_G.OrionLib:MakeNotification({ Name = "Switch Server", Content = tostring(reason), Time = 5 })
+				end
+			end
+		})
+	end)
+
+	settingsBuild("Find Most Empty Server", function()
+		settingsServerSection:AddButton({
+			Name = "Find Most Empty Server",
+			Icon = "users-round",
+			Callback = function()
+				local ok, reason = _G.F.switchServer(true)
+				if not ok and reason then
+					_G.OrionLib:MakeNotification({ Name = "Find Server", Content = tostring(reason), Time = 5 })
+				end
+			end
+		})
+	end)
+end
+
+settingsBuild("Config section", function()
+	_G.SettingsTab:AddSection({ Name = "Config Profiles" })
+end)
+
+settingsBuild("Config Name", function()
+	_G.SettingsTab:AddTextbox({
+		Name = "Config Name",
+		Default = _G.configProfileName,
+		TextDisappear = false,
+		Callback = function(value)
+			_G.configProfileName = _G.F.sanitizeConfigName(value)
+		end
+	})
+end)
+
+settingsBuild("Save Config", function()
+	_G.SettingsTab:AddButton({
+		Name = "Save Config",
+		Icon = "save",
+		Callback = function()
+			local snapshot = _G.F.collectConfigSnapshot()
+			snapshot.profile = _G.configProfileName
+			local fileName = _G.F.sanitizeConfigName(_G.configProfileName) .. ".json"
+			_G.F.saveConfigToFile(fileName, snapshot, false)
+			_G.F.saveConfigToFile(_G.CONFIG_AUTOSAVE_FILE, snapshot, true)
+		end
+	})
+end)
+
+settingsBuild("Load Config", function()
+	_G.SettingsTab:AddButton({
+		Name = "Load Config",
+		Icon = "folder-open",
+		Callback = function()
+			local fileName = _G.F.sanitizeConfigName(_G.configProfileName) .. ".json"
+			_G.F.loadConfigFromFile(fileName, false)
+		end
+	})
+end)
+
+settingsBuild("Unload Script", function()
+	_G.SettingsTab:AddButton({
+		Name = "Unload Script",
+		Icon = "power",
+		Callback = function()
+			_G.uiAlive = false
+			_G.F.disableAllFeatures()
+
+			task.defer(function()
+				pcall(function()
+					_G.OrionLib:Destroy()
+				end)
+			end)
+		end
+	})
+end)
+
+_G.startupConfigApplied = false
+if _G.startupConfig then
+	local ok, err = pcall(function()
+		_G.F.applyConfigSnapshot(_G.startupConfig, true)
+	end)
+	if ok then
+		_G.startupConfigApplied = true
+	else
+		warn("[LLSPLOIT] Startup config failed: " .. tostring(err))
+	end
+end
+
+task.spawn(function()
+	while _G.uiAlive do
+		_G.F.refreshPetrolithTableLabel()
+		task.wait(2)
+	end
+end)
+
+task.spawn(function()
+	local lastNoticeAt = 0
+
+	while _G.uiAlive do
+		if _G.autoDiscDropEnabled then
+			local didWork, reason = ArcadeAutomation:runAutoDiscDrop()
+
+			if not didWork and reason and os.clock() - lastNoticeAt >= 8 then
+				lastNoticeAt = os.clock()
+				warn("[Auto Disc Drop] " .. tostring(reason))
+
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Disc Drop",
+						Content = reason,
+						Time = 4
+					})
+				end)
+			end
+
+			task.wait(0.25)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.spawn(function()
+	while _G.uiAlive do
+		if _G.autoFossilEnabled and not _G.fossilBusy and os.clock() >= _G.nextAutoFossilAt then
+			local success, reason = _G.F.runAutoFossil()
+			_G.nextAutoFossilAt = os.clock() + _G.autoFossilDelay
+
+			if not success and reason and reason ~= "No complete Petrolith sets found." then
+				_G.OrionLib:MakeNotification({
+					Name = "Auto Fossil",
+					Content = reason,
+					Time = 5,
+				})
+			end
+		end
+
+		task.wait(0.15)
+	end
+end)
+
+task.spawn(function()
+	local lastNoticeAt = 0
+
+	while _G.uiAlive do
+		if _G.autoEggRainEnabled then
+			local success, reason
+			local ok, err = pcall(function()
+				success, reason = _G.F.runEggRainBringOnce()
+			end)
+
+			if not ok then
+				success = false
+				reason = tostring(err)
+				if type(_G.F.setEggRainStatus) == "function" then
+					_G.F.setEggRainStatus(reason)
+				end
+			end
+
+			if not success and reason and reason ~= "No Egg Rain parts found." and os.clock() - lastNoticeAt >= 5 then
+				lastNoticeAt = os.clock()
+				warn("[Egg Rain] " .. tostring(reason))
+
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Egg Rain",
+						Content = reason,
+						Time = 4,
+					})
+				end)
+			end
+
+			task.wait(math.max(0.05, tonumber(_G.autoEggRainDelay) or 0.25))
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+-- Egg Rain battle service: run away from hatch battles unless the foe is
+-- Gleaming/Gamma, in which case pause Auto Egg Rain so it can be caught.
+-- Mirrors the Auto Static run ladder (input-state gate, foe-flag settle
+-- delay, non-blocking tryRun).
+task.spawn(function()
+	local currentBattle = nil
+	local battleFirstSeenAt = 0
+	local foeLoadedAt = 0
+	local lastRunAttemptAt = 0
+	local runAttemptBattle = nil
+	local runAttemptStartedAt = 0
+	local lastSpecialNoticeAt = 0
+
+	while _G.uiAlive do
+		local staticBusy = false
+		pcall(function()
+			staticBusy = StaticAutomation and StaticAutomation:isAutomationActive() or false
+		end)
+
+		if _G.autoEggRainEnabled and not staticBusy then
+			pcall(function()
+				local battle = _G.F.getCurrentBattle()
+				if type(battle) ~= "table" then
+					currentBattle = nil
+					foeLoadedAt = 0
+					return
+				end
+
+				local now = os.clock()
+
+				if currentBattle ~= battle then
+					currentBattle = battle
+					battleFirstSeenAt = now
+					foeLoadedAt = 0
+				end
+
+				if _G.F.hasWildFoeLoaded(battle) then
+					local foe = battle.p2.monsters[1]
+					local gleamValue = foe and _G.F.getMonsterGleamValue(foe)
+
+					if _G.isActiveFlag(gleamValue) then
+						if now - lastSpecialNoticeAt >= 2 then
+							lastSpecialNoticeAt = now
+							_G.autoEggRainEnabled = false
+
+							if _G.configUi.autoEggRainToggle and type(_G.configUi.autoEggRainToggle.Set) == "function" then
+								task.defer(function()
+									pcall(function()
+										_G.configUi.autoEggRainToggle:Set(false)
+									end)
+								end)
+							end
+
+							_G.F.setEggRainStatus(string.format(
+								"Found %s (Gleaming/Gamma: %s) - paused.",
+								tostring(foe and (foe.name or foe.species) or "wild Loomian"),
+								tostring(gleamValue)
+							))
+
+							pcall(function()
+								_G.OrionLib:MakeNotification({
+									Name = "Egg Rain Paused",
+									Content = string.format(
+										"Found %s (Gleaming/Gamma: %s). Catch it manually!",
+										tostring(foe and (foe.name or foe.species) or "wild Loomian"),
+										tostring(gleamValue)
+									),
+									Time = 8,
+								})
+							end)
+						end
+
+						return
+					end
+				end
+
+				_G.F.setBattleFastForward(true, battle)
+				_G.F.applyBattleAnimationFastForward(battle, false)
+
+				if battle.ended then
+					_G.F.clearBattleRunTiming(battle)
+					return
+				end
+
+				if not _G.F.isStaticBattleReadyToEnd(battle) then
+					return
+				end
+
+				if foeLoadedAt == 0 then
+					foeLoadedAt = now
+				end
+
+				-- Let the gleam/gamma flags settle before any escape can fire.
+				if now - foeLoadedAt < 1 then
+					return
+				end
+
+				local allowTimedFallback = now - battleFirstSeenAt >= 6
+
+				if not _G.F.isBattleRunMenuReady(battle, allowTimedFallback) then
+					return
+				end
+
+				if now - lastRunAttemptAt < 0.35 then
+					return
+				end
+
+				lastRunAttemptAt = now
+
+				if runAttemptBattle == battle and now - runAttemptStartedAt < 8 then
+					return
+				end
+
+				runAttemptBattle = battle
+				runAttemptStartedAt = now
+
+				task.spawn(function()
+					pcall(function()
+						_G.F.naturalRunFromBattle(battle, allowTimedFallback)
+					end)
+
+					if runAttemptBattle == battle then
+						runAttemptBattle = nil
+					end
+				end)
+			end)
+
+			task.wait(0.08)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.spawn(function()
+	while _G.uiAlive do
+		if CatchAutomation and CatchAutomation:isEnabled() then
+			pcall(function()
+				CatchAutomation:serviceBattle()
+			end)
+			task.wait(0.06)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.spawn(function()
+	while _G.uiAlive do
+		if CatchAutomation and CatchAutomation:isEnabled() then
+			pcall(function()
+				CatchAutomation:serviceNicknamePrompt()
+			end)
+			task.wait(0.12)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.spawn(function()
+	while _G.uiAlive do
+		pcall(function()
+			_G.F.refreshInformationLabels()
+		end)
+		task.wait(2)
+	end
+end)
+
+task.spawn(function()
+	while _G.uiAlive do
+		if _G.autoBoonaryEnabled and not _G.autoBoonaryBusy and not _G.autoBoonaryTriggered then
+			local tix = _G.F.getCurrentTixCount()
+			if tix and tix >= (tonumber(_G.autoBoonaryTixThreshold) or 999999) then
+				_G.autoBoonaryTriggered = true
+				_G.F.setAutoBoonaryStatus("Tix threshold reached: " .. _G.F.formatInfoValue(tix))
+
+				task.spawn(function()
+					local ok, reason = _G.F.runAutoBoonaryCycle()
+					if not ok and reason then
+						_G.OrionLib:MakeNotification({
+							Name = "Auto Boonary",
+							Content = tostring(reason),
+							Time = 5,
+						})
+						_G.autoBoonaryTriggered = false
+					end
+				end)
+			else
+				_G.F.setAutoBoonaryStatus("Waiting for " .. _G.F.formatInfoValue(_G.autoBoonaryTixThreshold) .. " Tix.")
+			end
+		end
+
+		task.wait(2)
+	end
+end)
+
+_G.UserInputService.WindowFocused:Connect(function() _G.windowFocused = true end)
+_G.UserInputService.WindowFocusReleased:Connect(function() _G.windowFocused = false end)
+task.spawn(function()
+	while _G.uiAlive do
+		if StaticAutomation and StaticAutomation:isAutomationActive() then
+			pcall(function()
+				StaticAutomation:serviceBattle()
+			end)
+			task.wait(0.06)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.spawn(function()
+	local lastNoticeAt = 0
+	local quietReasons = {
+		["Waiting for static encounter data."] = true,
+		["Waiting for battle input."] = true,
+		["Waiting for the static prompt."] = true,
+		["Waiting for the chunk to load."] = true,
+		["Battle is not ready for Run."] = true,
+		["Cannot interact right now."] = true
+	}
+
+	while _G.uiAlive do
+		if StaticAutomation and StaticAutomation:isAutomationActive() then
+			local didWork, reason
+			local ok, err = pcall(function()
+				didWork, reason = StaticAutomation:runCycle()
+			end)
+
+			if not ok then
+				warn("[Auto Static] " .. tostring(err))
+			elseif not didWork and reason and not quietReasons[reason] and os.clock() - lastNoticeAt >= 8 then
+				lastNoticeAt = os.clock()
+				warn("[Auto Static] " .. tostring(reason))
+
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Static",
+						Content = reason,
+						Time = 4
+					})
+				end)
+			end
+
+			task.wait(_G.windowFocused and 0.12 or 0.2)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+task.spawn(function()
+	local lastHealNoticeAt = 0
+	local lastRepellentNoticeAt = 0
+
+	while _G.uiAlive do
+		local now = os.clock()
+
+		if _G.autoHealEnabled and now - (_G.lastAutoHealAt or 0) >= (_G.autoHealDelay or 8) then
+			_G.lastAutoHealAt = now
+			local ok, reason = _G.F.runAutoHealOnce()
+			if not ok and reason and now - lastHealNoticeAt >= 12 then
+				lastHealNoticeAt = now
+				warn("[Auto Heal] " .. tostring(reason))
+			end
+		end
+
+		if _G.activeRepellentEnabled and now - (_G.lastActiveRepellentAt or 0) >= (_G.activeRepellentDelay or 20) then
+			_G.lastActiveRepellentAt = now
+			local ok, reason = _G.F.useActiveRepellentOnce(false)
+			if not ok and reason and now - lastRepellentNoticeAt >= 20 then
+				lastRepellentNoticeAt = now
+				warn("[Active Repellent] " .. tostring(reason))
+			end
+		end
+
+		if _G.skipDialogueEnabled then
+			pcall(function()
+				_G.F.clickThroughNpcChat()
+			end)
+		end
+
+		if _G.denyReassignMoveEnabled or _G.denySwitchRequestEnabled or _G.denyNicknameEnabled then
+			pcall(function()
+				_G.F.servicePromptDenials()
+			end)
+		end
+
+		if _G.disableShowProgressEnabled then
+			pcall(function()
+				_G.F.dismissMasteryReport()
+			end)
+		end
+
+		if _G.noUnstuckCooldownEnabled then
+			pcall(function()
+				_G.F.applyNoUnstuckCooldown()
+			end)
+		end
+
+		task.wait(0.2)
+	end
+end)
+
+task.spawn(function()
+	local lastNoticeAt = 0
+	local quietReasons = {
+		["No rallied Loomians waiting."] = true
+	}
+
+	while _G.uiAlive do
+		if _G.autoRallyEnabled then
+			local didWork, reason
+			local ok, err = pcall(function()
+				didWork, reason = _G.F.runAutoRally()
+			end)
+
+			if not ok then
+				warn("[Auto Rally] " .. tostring(err))
+			elseif not didWork and reason and not quietReasons[reason] and os.clock() - lastNoticeAt >= 8 then
+				lastNoticeAt = os.clock()
+				warn("[Auto Rally] " .. tostring(reason))
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Rally",
+						Content = reason,
+						Time = 4
+					})
+				end)
+			end
+
+			task.wait(_G.rallyDelay)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+do
+	_G.CodexGetEndDelay = function()
+		return _G.windowFocused and _G.focusedEndDelay or _G.backgroundEndDelay
+	end
+
+	_G.CodexGetEndRetryDelay = function()
+		return _G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay
+	end
+
+	_G.CodexTryRunBattle = function(battle, forceSkip)
+		if not battle then
+			return false
+		end
+
+		if _G.F.isFishingBattleStarting(battle) or _G.F.isBattleSetupPending(battle) then
+			return false
+		end
+
+		if forceSkip then
+			_G.F.setBattleFastForward(true, battle)
+			_G.F.skipEncounterCutscene(battle)
+		elseif _G.autoEncounterEnabled then
+			_G.F.setBattleFastForward(true, battle)
+			_G.F.applyBattleAnimationFastForward(battle, false)
+		end
+
+		if _G.autoEncounterEnabled and not (CatchAutomation and CatchAutomation:shouldCatchBattle(battle)) then
+			-- Auto Use Move + Auto Encounter: attack instead of running, so
+			-- encounters get KO'd for EXP rather than fled from.
+			if _G.autoMoveOneEnabled then
+				return _G.F.useMoveOne(battle)
+			end
+
+			return _G.F.naturalRunFromBattle(battle, true)
+		end
+
+		return false
+	end
+
+	task.spawn(function()
+		local lastBattleObject = nil
+		local lastBattleSeenAt = 0
+		local battleFirstSeenAt = 0
+		local lastEndAttemptAt = 0
+		local lastBattleProgressSignature = nil
+		local lastBattleProgressAt = 0
+
+		while _G.uiAlive do
+			if _G.autoEncounterEnabled or _G.autoEncounterPausedBattle then
+				if type(_G._p) ~= "table" then
+					_G._p = _G.F.findP()
+				end
+
+				-- Wild wins grant mastery too; when fighting encounters (Auto
+				-- Use Move) the level-up report would block doWildBattle just
+				-- like trainer battles, so click it through here as well.
+				if _G.autoMoveOneEnabled then
+					pcall(function()
+						_G.F.dismissMasteryReport()
+					end)
+				end
+
+				if type(_G._p) == "table" then
+					local battle = _G.F.getCurrentBattle()
+					local now = os.clock()
+
+					if battle then
+						local catchManaged = CatchAutomation and CatchAutomation:shouldCatchBattle(battle)
+						if _G.F.isFishingGoppieBattle(battle)
+							and (_G.autoFishingEnabled or _G.fastForwardEnabled or (_G.autoCatchEnabled and catchManaged)) then
+							task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
+						else
+						lastBattleSeenAt = now
+
+						if battle ~= lastBattleObject then
+							lastBattleObject = battle
+							battleFirstSeenAt = now
+							lastEndAttemptAt = 0
+							lastBattleProgressSignature = _G.F.getBattleProgressSignature(battle)
+							lastBattleProgressAt = now
+							_G.F.skipEncounterCutscene(battle)
+						end
+
+						local targetMatch = _G.F.isMatchingEncounterTargetFoe(battle)
+						local roamerMatch = _G.F.isMatchingRoamingLegendaryFoe(battle)
+
+						if targetMatch then
+							_G.F.handleEncounterTargetMatchFound(battle)
+						end
+
+						if roamerMatch then
+							_G.F.handleRoamingLegendaryFound(battle)
+						end
+
+						local automationPausedForGleaming = _G.F.pauseNaturalRunForSpecialBattle(battle)
+						local automationPausedForFoundEncounter = _G.autoEncounterPausedBattle == battle
+
+						if not automationPausedForFoundEncounter and not targetMatch and not roamerMatch and not catchManaged and not automationPausedForGleaming then
+							local battleProgressSignature = _G.F.getBattleProgressSignature(battle)
+							if battleProgressSignature ~= lastBattleProgressSignature then
+								lastBattleProgressSignature = battleProgressSignature
+								lastBattleProgressAt = now
+							end
+
+							if not _G.F.isBattleSetupPending(battle) then
+								_G.F.setBattleFastForward(true, battle)
+								_G.F.applyBattleAnimationFastForward(battle, false)
+
+								if now - lastBattleProgressAt >= _G.fastForwardStuckDelay then
+									_G.F.nudgeFastForwardBattle(battle)
+									lastBattleProgressAt = now
+								end
+							end
+
+							local battleAge = now - battleFirstSeenAt
+							local retryAge = lastEndAttemptAt == 0 and math.huge or now - lastEndAttemptAt
+
+							if _G.autoMoveOneEnabled
+								and battleAge >= _G.CodexGetEndDelay()
+								and retryAge >= _G.CodexGetEndRetryDelay() then
+								-- Attack branch first: with Auto Use Move on, every
+								-- non-special encounter gets fought (even wrong-target
+								-- ones), instead of being run from.
+								lastEndAttemptAt = now
+								_G.CodexTryRunBattle(battle, false)
+							elseif _G.F.isWrongEncounterTargetFoe(battle) and _G.F.isBattleRunMenuReady(battle, true) then
+								lastEndAttemptAt = now
+								_G.CodexTryRunBattle(battle, false)
+							elseif not _G.F.shouldFilterEncounterTarget()
+								and battleAge >= _G.CodexGetEndDelay()
+								and retryAge >= _G.CodexGetEndRetryDelay() then
+								lastEndAttemptAt = now
+								_G.CodexTryRunBattle(battle, false)
+							end
+						end
+
+						task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
+						end
+					else
+						if lastBattleObject and (now - lastBattleSeenAt) >= _G.encounterReleaseDelay then
+							_G.F.releaseFinishedBattle(lastBattleObject)
+							_G.F.clearNaturalRunSpecialPause(lastBattleObject)
+							_G.F.resumeAutoEncounterAfterPausedBattle(lastBattleObject)
+							lastBattleObject = nil
+							battleFirstSeenAt = 0
+							lastEndAttemptAt = 0
+							lastBattleProgressSignature = nil
+							lastBattleProgressAt = 0
+						elseif _G.autoEncounterPausedBattle then
+							_G.F.resumeAutoEncounterAfterPausedBattle(nil)
+						end
+
+						task.wait(_G.windowFocused and 0.18 or 0.15)
+					end
+				else
+					task.wait(0.2)
+				end
+			else
+				_G.F.clearAllBattleFastForward()
+				lastBattleObject = nil
+				battleFirstSeenAt = 0
+				lastEndAttemptAt = 0
+				lastBattleProgressSignature = nil
+				lastBattleProgressAt = 0
+				task.wait(0.2)
+			end
+		end
+	end)
+end
+
+
+task.spawn(function()
+	local lastFailure = nil
+	local lastFailureNoticeAt = 0
+
+	while _G.uiAlive do
+		if _G.autoEncounterEnabled then
+			if type(_G._p) ~= "table" then
+				_G._p = _G.F.findP()
+			end
+
+			local started, reason = _G.F.startAutoEncounter()
+
+			if not started and reason and reason ~= "Battle already active." and reason ~= lastFailure then
+				lastFailure = reason
+
+				local now = os.clock()
+				if now - lastFailureNoticeAt >= 4 then
+					lastFailureNoticeAt = now
+
+					pcall(function()
+						_G.OrionLib:MakeNotification({
+							Name = "Auto Encounter",
+							Content = reason,
+							Time = 4
+						})
+					end)
+				end
+			elseif started then
+				lastFailure = nil
+			end
+
+			task.wait(_G.autoEncounterDelay)
+		else
+			lastFailure = nil
+			task.wait(0.2)
+		end
+	end
+end)
+
+task.defer(function()
+	if not _G.startupConfigApplied then
+		_G.F.syncConfigUiFromVariables()
+	end
+
+	local lastEncoded = _G.HttpService:JSONEncode(_G.F.collectConfigSnapshot())
+	task.spawn(function()
+		while _G.uiAlive do
+			task.wait(1)
+			if not _G.applyingConfig then
+				local ok, encoded = pcall(function()
+					return _G.HttpService:JSONEncode(_G.F.collectConfigSnapshot())
+				end)
+				if ok and encoded ~= lastEncoded then
+					lastEncoded = encoded
+					_G.F.saveConfigToFile(_G.CONFIG_AUTOSAVE_FILE, nil, true)
+				end
+			end
+		end
+	end)
+end)
+
+
+do
+	_G.CodexTryRunFishingBattle = function(battle, forceSkip)
+		if not battle then
+			return false
+		end
+
+		if _G.F.isFishingBattleStarting(battle) or _G.F.isBattleSetupPending(battle) then
+			return false
+		end
+
+		if forceSkip then
+			_G.F.setBattleFastForward(true, battle)
+			_G.F.skipEncounterCutscene(battle)
+		elseif _G.fastForwardEnabled then
+			_G.F.setBattleFastForward(true, battle)
+			_G.F.applyBattleAnimationFastForward(battle, false)
+		end
+
+		if CatchAutomation and CatchAutomation:shouldCatchBattle(battle) then
+			return false
+		end
+
+		if not _G.autoFishingEnabled then
+			return false
+		end
+
+		if _G.F.isAutoFishingExcludedGoppieBattle(battle) then
+			return _G.F.naturalRunFromBattle(battle)
+		end
+
+		local foe = _G.F.getBattleFoeMonster(battle)
+		local formeValue = _G.F.getFishingGoppieFormeValue(battle)
+		if not _G.F.isGoppieMonster(foe) and not _G.F.isMeaningfulFormeValue(formeValue) then
+			return _G.F.naturalRunFromBattle(battle)
+		end
+
+		return false
+	end
+
+	task.spawn(function()
+		local lastBattleObject = nil
+		local encounterActive = false
+		local lastBattleSeenAt = 0
+		local battleFirstSeenAt = 0
+		local lastEndAttemptAt = 0
+		local lastBattleProgressSignature = nil
+		local lastBattleProgressAt = 0
+
+		while _G.uiAlive do
+			if _G.autoFishingEnabled or _G.fastForwardEnabled or _G.autoCatchEnabled then
+				if type(_G._p) ~= "table" then
+					_G._p = _G.F.findP()
+				end
+
+				if type(_G._p) == "table" then
+					local battle = _G.F.getCurrentBattle()
+					local now = os.clock()
+					local catchManaged = CatchAutomation and CatchAutomation:shouldCatchBattle(battle)
+					local fishingBattle = battle and _G.F.isFishingGoppieBattle(battle)
+					local manageFishingBattle = fishingBattle
+						and (_G.autoFishingEnabled or _G.fastForwardEnabled or (_G.autoCatchEnabled and catchManaged))
+
+					if battle and manageFishingBattle then
+						local runAutomationEnabled = _G.autoFishingEnabled
+						lastBattleSeenAt = now
+						if _G.autoFishingEnabled then
+							_G.F.rememberAutoFishingGoppieFormeFromBattle(battle)
+						end
+
+						if battle ~= lastBattleObject then
+							lastBattleObject = battle
+							battleFirstSeenAt = now
+							lastEndAttemptAt = 0
+							lastBattleProgressSignature = _G.F.getBattleProgressSignature(battle)
+							lastBattleProgressAt = now
+
+							if runAutomationEnabled then
+								encounterActive = true
+							end
+						elseif runAutomationEnabled and not encounterActive then
+							encounterActive = true
+						end
+
+						local automationPausedForGleaming = _G.F.pauseNaturalRunForSpecialBattle(battle)
+
+						if not catchManaged then
+							local battleProgressSignature = _G.F.getBattleProgressSignature(battle)
+							if battleProgressSignature ~= lastBattleProgressSignature then
+								lastBattleProgressSignature = battleProgressSignature
+								lastBattleProgressAt = now
+							end
+
+							if not _G.F.isBattleSetupPending(battle)
+								and (_G.fastForwardEnabled or _G.autoFishingEnabled)
+								and not automationPausedForGleaming then
+								_G.F.setBattleFastForward(true, battle)
+								_G.F.applyBattleAnimationFastForward(battle, false)
+
+								if now - lastBattleProgressAt >= _G.fastForwardStuckDelay then
+									_G.F.nudgeFastForwardBattle(battle)
+									lastBattleProgressAt = now
+								end
+							end
+
+							local battleAge = now - battleFirstSeenAt
+							local retryAge = lastEndAttemptAt == 0 and math.huge or now - lastEndAttemptAt
+
+							if _G.autoFishingEnabled and not automationPausedForGleaming
+								and battleAge >= _G.CodexGetEndDelay() and retryAge >= _G.CodexGetEndRetryDelay() then
+								lastEndAttemptAt = now
+								_G.CodexTryRunFishingBattle(battle, false)
+							end
+						end
+
+						task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
+					else
+						if lastBattleObject and (now - lastBattleSeenAt) >= _G.encounterReleaseDelay then
+							_G.F.releaseFinishedBattle(lastBattleObject)
+							_G.F.clearNaturalRunSpecialPause(lastBattleObject)
+							lastBattleObject = nil
+							battleFirstSeenAt = 0
+							lastEndAttemptAt = 0
+							lastBattleProgressSignature = nil
+							lastBattleProgressAt = 0
+						end
+
+						if encounterActive and (now - lastBattleSeenAt) >= _G.encounterReleaseDelay then
+							encounterActive = false
+						end
+
+						task.wait(_G.windowFocused and 0.18 or 0.15)
+					end
+				else
+					task.wait(0.2)
+				end
+			else
+				lastBattleObject = nil
+				encounterActive = false
+				battleFirstSeenAt = 0
+				lastEndAttemptAt = 0
+				lastBattleProgressSignature = nil
+				lastBattleProgressAt = 0
+				task.wait(0.2)
+			end
+		end
+	end)
+end
+
+task.spawn(function()
+	local lastNoticeAt = 0
+	local quietReasons = {
+		["Battle already active."] = true,
+		["Fishing already in progress."] = true,
+		["NPC chat is busy."] = true
+	}
+
+	while _G.uiAlive do
+		if FishingAutomation and FishingAutomation:isEnabled() then
+			local didWork, reason
+
+			local ok, err = pcall(function()
+				didWork, reason = FishingAutomation:runCycle()
+			end)
+
+			if not ok then
+				warn("[Auto Fishing] " .. tostring(err))
+			elseif not didWork and reason and not quietReasons[reason] and os.clock() - lastNoticeAt >= 8 then
+				lastNoticeAt = os.clock()
+				warn("[Auto Fishing] " .. tostring(reason))
+
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Auto Fishing",
+						Content = reason,
+						Time = 4
+					})
+				end)
+			end
+
+			task.wait(0.25)
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+return { name = "ui" }
