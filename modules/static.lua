@@ -1,6 +1,6 @@
 -- static.lua
 -- Soft-reset / Arceros StaticAutomation.
-_G.StaticAutomation = (function()
+local StaticAutomation = (function()
 	local api = {}
 	local enabled = false
 	local toggle = nil
@@ -1547,4 +1547,9 @@ _G.StaticAutomation = (function()
 	return api
 end)()
 
-return { name = "static" }
+_G.StaticAutomation = StaticAutomation
+if getgenv then
+	getgenv().StaticAutomation = StaticAutomation
+end
+
+return { name = "static", StaticAutomation = StaticAutomation }

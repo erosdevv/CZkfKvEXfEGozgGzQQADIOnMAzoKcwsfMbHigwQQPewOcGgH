@@ -1752,4 +1752,4 @@ return OrionLib
 
 end)()
 
-return { name = "orion" }
+return { name = "orion", OrionLib = _G.OrionLib }

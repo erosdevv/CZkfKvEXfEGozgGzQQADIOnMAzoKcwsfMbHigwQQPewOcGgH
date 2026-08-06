@@ -5,6 +5,7 @@
 
 local BRANCH = "main"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/LLSPLOIT/" .. BRANCH
+local ENV    = (getgenv and getgenv()) or _G
 
 local MODULES = {
 	"boot",
@@ -22,10 +23,35 @@ local MODULES = {
 	"ui",
 }
 
+local EXPORT_KEYS = {
+	"FishingAutomation",
+	"StaticAutomation",
+	"CatchAutomation",
+	"ArcadeAutomation",
+	"OrionLib",
+}
+
+local function store(key, value)
+	_G[key] = value
+	ENV[key] = value
+end
+
+local function applyExports(result)
+	if type(result) ~= "table" then
+		return
+	end
+	for _, key in ipairs(EXPORT_KEYS) do
+		if result[key] ~= nil then
+			store(key, result[key])
+		end
+	end
+end
+
 -- Two-phase load: download every module first (HttpGet yields), then run them
 -- back-to-back with no yields so task.defer/spawn cannot race unfinished modules.
 local function downloadModule(name)
-	local url = REPO .. "/modules/" .. name .. ".lua"
+	-- Cache-bust raw CDN so module updates are visible immediately.
+	local url = REPO .. "/modules/" .. name .. ".lua?v=" .. tostring(os.clock())
 	local src = game:HttpGet(url)
 	if type(src) ~= "string" or src == "" or src:sub(1, 3) == "404" then
 		error("[LLSPLOIT] Failed to download '" .. name .. "' from " .. url)
@@ -35,7 +61,7 @@ local function downloadModule(name)
 		error("[LLSPLOIT] Compile error in '" .. name .. "': " .. tostring(compileErr))
 	end
 	if setfenv then
-		pcall(setfenv, chunk, getfenv and getfenv() or _G)
+		pcall(setfenv, chunk, ENV)
 	end
 	return chunk
 end
@@ -48,6 +74,7 @@ local function runModule(name, chunk)
 	if type(result) ~= "table" then
 		error("[LLSPLOIT] Module '" .. name .. "' did not return a table")
 	end
+	applyExports(result)
 	print("[LLSPLOIT] Loaded: " .. name)
 	return result
 end
@@ -66,10 +93,9 @@ local loadOk, loadErr = xpcall(function()
 		runModule(entry.name, entry.chunk)
 		if entry.name == "orion" then
 			print("[LLSPLOIT] Orion library ready")
-			if type(_G.__llsploitBootNotify) == "function" then
-				_G.__llsploitBootNotify("Orion ready, building UI...")
-			elseif type(__llsploitBootNotify) == "function" then
-				__llsploitBootNotify("Orion ready, building UI...")
+			local notify = ENV.__llsploitBootNotify or _G.__llsploitBootNotify or __llsploitBootNotify
+			if type(notify) == "function" then
+				notify("Orion ready, building UI...")
 			end
 		end
 	end
@@ -77,14 +103,14 @@ end, debug.traceback)
 
 if not loadOk then
 	warn("[LLSPLOIT] Failed to load:\n" .. tostring(loadErr))
-	if type(_G.__llsploitBootNotify) == "function" then
-		_G.__llsploitBootNotify("Load failed - check console (F9)")
-	elseif type(__llsploitBootNotify) == "function" then
-		__llsploitBootNotify("Load failed - check console (F9)")
+	local notify = ENV.__llsploitBootNotify or _G.__llsploitBootNotify or __llsploitBootNotify
+	if type(notify) == "function" then
+		notify("Load failed - check console (F9)")
 	end
 	pcall(function()
-		if _G.OrionLib then
-			_G.OrionLib:MakeNotification({
+		local orion = ENV.OrionLib or _G.OrionLib
+		if orion then
+			orion:MakeNotification({
 				Name = "LLSPLOIT",
 				Content = "Failed to load. Check the output console.",
 				Time = 8,
@@ -92,6 +118,14 @@ if not loadOk then
 		end
 	end)
 	return
+end
+
+-- Re-assert automations onto shared env before post-load hooks / UI use.
+for _, key in ipairs(EXPORT_KEYS) do
+	local value = ENV[key] or _G[key]
+	if value ~= nil then
+		store(key, value)
+	end
 end
 
 -- Safe to run now: every module has finished defining _G.F / automations.
@@ -115,7 +149,8 @@ pcall(function()
 	end
 end)
 
-_G.OrionLib:Init()
+local orion = ENV.OrionLib or _G.OrionLib
+orion:Init()
 
 task.defer(function()
 	for _ = 1, 30 do

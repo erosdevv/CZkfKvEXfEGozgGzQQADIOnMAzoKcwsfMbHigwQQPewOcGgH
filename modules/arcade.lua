@@ -1,6 +1,6 @@
 -- arcade.lua
 -- ArcadeAutomation (Disc Drop).
-_G.ArcadeAutomation = (function()
+local ArcadeAutomation = (function()
 	local api = {}
 
 	local discDropStatusLabel = nil
@@ -436,4 +436,9 @@ _G.ArcadeAutomation = (function()
 	return api
 end)()
 
-return { name = "arcade" }
+_G.ArcadeAutomation = ArcadeAutomation
+if getgenv then
+	getgenv().ArcadeAutomation = ArcadeAutomation
+end
+
+return { name = "arcade", ArcadeAutomation = ArcadeAutomation }

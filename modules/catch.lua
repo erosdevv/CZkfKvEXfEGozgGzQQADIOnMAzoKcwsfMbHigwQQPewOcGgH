@@ -1,6 +1,6 @@
 -- catch.lua
 -- CatchAutomation for wild encounters.
-_G.CatchAutomation = (function()
+local CatchAutomation = (function()
 	local api = {}
 
 	local lastCatchDiscRequest = nil
@@ -789,4 +789,9 @@ _G.CatchAutomation = (function()
 	return api
 end)()
 
-return { name = "catch" }
+_G.CatchAutomation = CatchAutomation
+if getgenv then
+	getgenv().CatchAutomation = CatchAutomation
+end
+
+return { name = "catch", CatchAutomation = CatchAutomation }

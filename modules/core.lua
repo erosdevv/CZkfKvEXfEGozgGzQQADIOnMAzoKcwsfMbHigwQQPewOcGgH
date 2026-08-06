@@ -851,7 +851,7 @@ _G.F.safeSetParagraph = function(paragraph, text)
 	end)
 end
 
-_G.FishingAutomation = (function()
+local FishingAutomation = (function()
 	local api = {}
 	local statusParagraph = nil
 	local lastCastAt = 0
@@ -1271,6 +1271,9 @@ _G.FishingAutomation = (function()
 	return api
 end)()
 
-_G.FishingAutomation = _G.FishingAutomation
+_G.FishingAutomation = FishingAutomation
+if getgenv then
+	getgenv().FishingAutomation = FishingAutomation
+end
 
-return { name = "core" }
+return { name = "core", FishingAutomation = FishingAutomation }
