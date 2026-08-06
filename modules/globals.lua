@@ -378,10 +378,6 @@ _G.autoBoonaryTriggered = false
 _G.autoBoonaryStatusLabel = nil
 _G.autoBoonaryScanNodeLimit = 5000
 
--- Egg Rain
-_G.autoEggRainEnabled = false
-_G.autoEggRainDelay = 0.25
-_G.eggRainStatusLabel = nil
 _G.EGG_RAIN_TARGET_NAME = "Part"
 _G.EGG_RAIN_TARGET_SIZE = Vector3.new(15, 1, 1)
 _G.EGG_RAIN_SIZE_TOLERANCE = 0.05

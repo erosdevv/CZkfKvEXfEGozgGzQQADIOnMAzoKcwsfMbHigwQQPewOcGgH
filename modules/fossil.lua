@@ -1243,7 +1243,6 @@ _G.F.disableAllFeatures = function()
 	_G.autoTrainerEnabled = false
 	_G.autoMoveOneEnabled = false
 	_G.autoFossilEnabled = false
-	_G.autoEggRainEnabled = false
 	_G.autoDiscDropEnabled = false
 	_G.autoBoonaryEnabled = false
 	_G.autoBoonaryBusy = false
@@ -1614,8 +1613,6 @@ _G.F.collectConfigSnapshot = function()
 		autoBoonaryEnabled = _G.F.getToggleConfigValue(_G.configUi.autoBoonaryToggle, _G.autoBoonaryEnabled),
 		autoBoonaryTixThreshold = _G.autoBoonaryTixThreshold,
 		autoBoonaryGroup = _G.autoBoonaryGroup,
-		autoEggRainEnabled = _G.F.getToggleConfigValue(_G.configUi.autoEggRainToggle, _G.autoEggRainEnabled),
-		autoEggRainDelay = _G.autoEggRainDelay,
 		autoFishingEnabled = _G.F.getToggleConfigValue(_G.configUi.autoFishingToggle, _G.autoFishingEnabled),
 		autoFishingDelay = _G.autoFishingDelay,
 		fastForwardEnabled = _G.F.getToggleConfigValue(_G.configUi.fastForwardToggle, _G.fastForwardEnabled),
@@ -1808,9 +1805,6 @@ _G.F.applyConfigVariables = function(data)
 		end
 	end
 
-	if data.autoEggRainEnabled ~= nil then
-		_G.autoEggRainEnabled = _G.F.configBool(data.autoEggRainEnabled, false)
-	end
 
 	if data.wallSparkleUmvEnabled ~= nil then
 		_G.F.setWallSparkleUmvEnabled(_G.F.configBool(data.wallSparkleUmvEnabled, false))
@@ -1834,9 +1828,6 @@ _G.F.applyConfigVariables = function(data)
 		_G.autoFishingDelay = tonumber(data.autoFishingDelay) or _G.autoFishingDelay
 	end
 
-	if data.autoEggRainDelay ~= nil then
-		_G.autoEggRainDelay = tonumber(data.autoEggRainDelay) or _G.autoEggRainDelay
-	end
 
 	if data.fastForwardEnabled ~= nil then
 		_G.F.setFastForwardEnabled(_G.F.configBool(data.fastForwardEnabled, false))
@@ -1954,8 +1945,6 @@ _G.F.syncConfigUiFromVariables = function()
 	if _G.configUi.autoBoonaryToggle then
 		_G.F.setToggleUi(_G.configUi.autoBoonaryToggle, _G.autoBoonaryEnabled)
 	end
-	_G.F.setToggleUi(_G.configUi.autoEggRainToggle, _G.autoEggRainEnabled)
-	_G.F.setSliderUi(_G.configUi.autoEggRainDelay, _G.autoEggRainDelay)
 	if _G.configUi.fastForwardToggle then
 		_G.F.setToggleUi(_G.configUi.fastForwardToggle, _G.fastForwardEnabled)
 	end

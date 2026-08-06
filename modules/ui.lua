@@ -22,27 +22,27 @@ pcall(function()
 end)
 
 _G.OverviewTab = _G.Window:MakeTab({ Name = "Overview", Icon = "layout-dashboard" })
-_G.EncountersTab = _G.Window:MakeTab({ Name = "Encounters", Icon = "sparkles" })
+_G.EncountersTab = _G.Window:MakeTab({ Name = "Farm", Icon = "sparkles" })
 _G.HuntsTab = _G.Window:MakeTab({ Name = "Hunts", Icon = "crosshair" })
 _G.BattleTab = _G.Window:MakeTab({ Name = "Battle", Icon = "swords" })
-_G.TrainersTab = _G.Window:MakeTab({ Name = "Trainers", Icon = "user-check" })
 _G.RallyTab = _G.Window:MakeTab({ Name = "Rally", Icon = "users" })
 _G.StorageTab = _G.Window:MakeTab({ Name = "Storage", Icon = "archive" })
-_G.FishingTab = _G.Window:MakeTab({ Name = "Fishing", Icon = "waves" })
-_G.FossilReviveTab = _G.Window:MakeTab({ Name = "Fossil Revive", Icon = "bone" })
-_G.MinigamesTab = _G.Window:MakeTab({ Name = "Minigames", Icon = "gamepad-2" })
-_G.ShopTab = _G.Window:MakeTab({ Name = "Shops", Icon = "shopping-bag" })
+_G.FossilTab = _G.Window:MakeTab({ Name = "Fossil", Icon = "bone" })
+_G.ArcadeTab = _G.Window:MakeTab({ Name = "Arcade", Icon = "gamepad-2" })
 _G.SettingsTab = _G.Window:MakeTab({ Name = "Settings", Icon = "settings" })
 
--- Legacy aliases for automation modules that still reference older tab names.
+-- Aliases keep older section builders working after the tab merge.
 _G.DashboardTab = _G.OverviewTab
 _G.InformationTab = _G.OverviewTab
+_G.FishingTab = _G.EncountersTab
+_G.TrainersTab = _G.BattleTab
 _G.HuntingTab = _G.HuntsTab
 _G.StaticTab = _G.HuntsTab
 _G.CollectionTab = _G.StorageTab
-_G.ArcadeTab = _G.MinigamesTab
-_G.EggRainTab = _G.MinigamesTab
-_G.WorldTab = _G.FossilReviveTab
+_G.MinigamesTab = _G.ArcadeTab
+_G.ShopTab = _G.SettingsTab
+_G.FossilReviveTab = _G.FossilTab
+_G.WorldTab = _G.FossilTab
 
 local informationCurrencySection = _G.InformationTab:AddSection({ Name = "Currencies" })
 _G.informationLabels.money = informationCurrencySection:AddLabel("Money: N/A")
@@ -369,7 +369,7 @@ for slot = 1, 4 do
 	table.insert(jackMoveOptions, "Move " .. tostring(slot))
 end
 
-_G.TrainersTab:AddSection({ Name = "Auto Move" })
+_G.BattleTab:AddSection({ Name = "Trainer Auto Move" })
 
 _G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
 	Name = "Auto Move",
@@ -383,7 +383,7 @@ _G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
 	end,
 })
 
-_G.TrainersTab:AddSection({ Name = "Auto Battle" })
+_G.BattleTab:AddSection({ Name = "Trainer Target" })
 
 _G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
 	Name = "Trainer",
@@ -703,7 +703,7 @@ collectionUtilitySection:AddButton({
 })
 
 
-_G.FishingTab:AddSection({ Name = "Auto Fishing" })
+_G.EncountersTab:AddSection({ Name = "Fishing" })
 do
 	local fishing = _G.FishingAutomation or (getgenv and getgenv().FishingAutomation)
 	if not fishing then
@@ -713,7 +713,7 @@ do
 end
 
 
-_G.FishingTab:AddSection({ Name = "Goppie Tracking" })
+_G.EncountersTab:AddSection({ Name = "Goppie Tracking" })
 
 _G.goppieFormesTextbox = _G.FishingTab:AddTextbox({
 	Name = "Goppie Formes",
@@ -730,7 +730,7 @@ end)
 
 
 -- Status & scan --------------------------------------------------------------
-local fossilStatusSection = _G.FossilReviveTab:AddSection({ Name = "Fossil Revival — Status" })
+local fossilStatusSection = _G.FossilReviveTab:AddSection({ Name = "Status" })
 
 _G.fossilStatusLabel = fossilStatusSection:AddLabel("Status: Idle")
 _G.fossilStatsLabel = fossilStatusSection:AddLabel("Batches: 0 | Revived: 0 | Last Queued: 0")
@@ -892,7 +892,7 @@ task.defer(function()
 end)
 
 
-_G.MinigamesTab:AddSection({ Name = "Disc Drop" })
+_G.ArcadeTab:AddSection({ Name = "Disc Drop" })
 do
 	local arcade = _G.ArcadeAutomation or (getgenv and getgenv().ArcadeAutomation)
 	if not arcade then
@@ -902,48 +902,7 @@ do
 end
 
 
-_G.MinigamesTab:AddSection({ Name = "Egg Rain" })
-_G.eggRainStatusLabel = _G.MinigamesTab:AddLabel("Status: Idle")
-
-_G.configUi.autoEggRainToggle = _G.MinigamesTab:AddToggle({
-	Name = "Auto Egg Rain",
-	Default = _G.autoEggRainEnabled,
-	Color = Color3.fromRGB(255, 215, 90),
-	Callback = function(value)
-		_G.autoEggRainEnabled = value
-		_G.F.setEggRainStatus(value and "Auto Egg Rain enabled." or "Auto Egg Rain disabled.")
-	end
-})
-
-_G.configUi.autoEggRainDelay = _G.MinigamesTab:AddSlider({
-	Name = "Bring Delay",
-	Min = 0.1,
-	Max = 3,
-	Increment = 0.1,
-	Default = _G.autoEggRainDelay,
-	ValueName = "s",
-	Callback = function(value)
-		_G.autoEggRainDelay = value
-	end
-})
-
-_G.MinigamesTab:AddButton({
-	Name = "Bring Egg Once",
-	Icon = "zap",
-	Callback = function()
-		local success, reason = _G.F.runEggRainBringOnce()
-		if not success and reason then
-			_G.OrionLib:MakeNotification({
-				Name = "Egg Rain",
-				Content = reason,
-				Time = 4,
-			})
-		end
-	end
-})
-
-
-_G.ShopTab:AddSection({ Name = "Open Shops" })
+_G.SettingsTab:AddSection({ Name = "Shops" })
 
 for _, shopInfo in ipairs(_G.SHOP_DEFINITIONS) do
 	local shopId = shopInfo.Id
@@ -1219,177 +1178,7 @@ task.spawn(function()
 	end
 end)
 
-task.spawn(function()
-	local lastNoticeAt = 0
 
-	while _G.uiAlive do
-		if _G.autoEggRainEnabled then
-			local success, reason
-			local ok, err = pcall(function()
-				success, reason = _G.F.runEggRainBringOnce()
-			end)
-
-			if not ok then
-				success = false
-				reason = tostring(err)
-				if type(_G.F.setEggRainStatus) == "function" then
-					_G.F.setEggRainStatus(reason)
-				end
-			end
-
-			if not success and reason and reason ~= "No Egg Rain parts found." and os.clock() - lastNoticeAt >= 5 then
-				lastNoticeAt = os.clock()
-				warn("[Egg Rain] " .. tostring(reason))
-
-				pcall(function()
-					_G.OrionLib:MakeNotification({
-						Name = "Egg Rain",
-						Content = reason,
-						Time = 4,
-					})
-				end)
-			end
-
-			task.wait(math.max(0.05, tonumber(_G.autoEggRainDelay) or 0.25))
-		else
-			task.wait(0.2)
-		end
-	end
-end)
-
--- Egg Rain battle service: run away from hatch battles unless the foe is
--- Gleaming/Gamma, in which case pause Auto Egg Rain so it can be caught.
--- Mirrors the Auto Static run ladder (input-state gate, foe-flag settle
--- delay, non-blocking tryRun).
-task.spawn(function()
-	local currentBattle = nil
-	local battleFirstSeenAt = 0
-	local foeLoadedAt = 0
-	local lastRunAttemptAt = 0
-	local runAttemptBattle = nil
-	local runAttemptStartedAt = 0
-	local lastSpecialNoticeAt = 0
-
-	while _G.uiAlive do
-		local staticBusy = false
-		pcall(function()
-			staticBusy = _G.StaticAutomation and _G.StaticAutomation:isAutomationActive() or false
-		end)
-
-		if _G.autoEggRainEnabled and not staticBusy then
-			pcall(function()
-				local battle = _G.F.getCurrentBattle()
-				if type(battle) ~= "table" then
-					currentBattle = nil
-					foeLoadedAt = 0
-					return
-				end
-
-				local now = os.clock()
-
-				if currentBattle ~= battle then
-					currentBattle = battle
-					battleFirstSeenAt = now
-					foeLoadedAt = 0
-				end
-
-				if _G.F.hasWildFoeLoaded(battle) then
-					local foe = battle.p2.monsters[1]
-					local gleamValue = foe and _G.F.getMonsterGleamValue(foe)
-
-					if _G.isActiveFlag(gleamValue) then
-						if now - lastSpecialNoticeAt >= 2 then
-							lastSpecialNoticeAt = now
-							_G.autoEggRainEnabled = false
-
-							if _G.configUi.autoEggRainToggle and type(_G.configUi.autoEggRainToggle.Set) == "function" then
-								task.defer(function()
-									pcall(function()
-										_G.configUi.autoEggRainToggle:Set(false)
-									end)
-								end)
-							end
-
-							_G.F.setEggRainStatus(string.format(
-								"Found %s (Gleaming/Gamma: %s) - paused.",
-								tostring(foe and (foe.name or foe.species) or "wild Loomian"),
-								tostring(gleamValue)
-							))
-
-							pcall(function()
-								_G.OrionLib:MakeNotification({
-									Name = "Egg Rain Paused",
-									Content = string.format(
-										"Found %s (Gleaming/Gamma: %s). Catch it manually!",
-										tostring(foe and (foe.name or foe.species) or "wild Loomian"),
-										tostring(gleamValue)
-									),
-									Time = 8,
-								})
-							end)
-						end
-
-						return
-					end
-				end
-
-				_G.F.setBattleFastForward(true, battle)
-				_G.F.applyBattleAnimationFastForward(battle, false)
-
-				if battle.ended then
-					_G.F.clearBattleRunTiming(battle)
-					return
-				end
-
-				if not _G.F.isStaticBattleReadyToEnd(battle) then
-					return
-				end
-
-				if foeLoadedAt == 0 then
-					foeLoadedAt = now
-				end
-
-				-- Let the gleam/gamma flags settle before any escape can fire.
-				if now - foeLoadedAt < 1 then
-					return
-				end
-
-				local allowTimedFallback = now - battleFirstSeenAt >= 6
-
-				if not _G.F.isBattleRunMenuReady(battle, allowTimedFallback) then
-					return
-				end
-
-				if now - lastRunAttemptAt < 0.35 then
-					return
-				end
-
-				lastRunAttemptAt = now
-
-				if runAttemptBattle == battle and now - runAttemptStartedAt < 8 then
-					return
-				end
-
-				runAttemptBattle = battle
-				runAttemptStartedAt = now
-
-				task.spawn(function()
-					pcall(function()
-						_G.F.naturalRunFromBattle(battle, allowTimedFallback)
-					end)
-
-					if runAttemptBattle == battle then
-						runAttemptBattle = nil
-					end
-				end)
-			end)
-
-			task.wait(0.08)
-		else
-			task.wait(0.2)
-		end
-	end
-end)
 
 task.spawn(function()
 	while _G.uiAlive do
