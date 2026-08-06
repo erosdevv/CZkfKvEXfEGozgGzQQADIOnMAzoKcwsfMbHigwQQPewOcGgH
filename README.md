@@ -27,9 +27,9 @@ Toggle the window with **RightShift** if it is hidden.
 | Tab | What’s inside |
 |-----|----------------|
 | **Overview** | Money / Tix / BP + status |
-| **Farm** | Wild encounters, capture rules, fishing, Goppie formes |
+| **Farm** | Wild encounters, capture rules, fishing, Goppie formes, Use Spare / Corrupt Move |
 | **Hunts** | Static soft-resets + beast hunts |
-| **Battle** | Auto battle, fast-forward, prompt denies, trainer farming |
+| **Battle** | Auto battle, fast-forward, prompt denies, Ignore NPC Battle, End Battle, trainer farming |
 | **Rally** | Auto rally keep/release rules |
 | **Storage** | Boonary cleanup, heal / repel / PC helpers |
 | **Fossil** | Petrolith revive automation |
