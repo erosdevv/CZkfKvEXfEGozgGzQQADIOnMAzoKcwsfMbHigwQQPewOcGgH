@@ -37,11 +37,6 @@ _G.F.findP = function()
 	return nil
 end
 
-task.defer(function()
-	local ok, found = pcall(_G.F.findP)
-	_G._p = ok and found or nil
-end)
-
 _G.F.safeTableGet = function(object, key)
 	if type(object) ~= "table" then
 		return nil

@@ -2149,9 +2149,6 @@ end
 
 _G.startupConfig = _G.F.readConfigDataFromFile(_G.CONFIG_AUTOSAVE_FILE)
 _G.F.loadGoppieFormesFromFile()
-task.defer(function()
-	_G.F.installGoppieCaptureNetworkHook()
-end)
 if _G.startupConfig then
 	if _G.startupConfig.profile then
 		_G.configProfileName = _G.F.sanitizeConfigName(_G.startupConfig.profile)

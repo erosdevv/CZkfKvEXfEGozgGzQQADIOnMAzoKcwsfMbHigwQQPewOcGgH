@@ -113,12 +113,8 @@ _G.F.clearAllBattleFastForward = function()
 	_G.F.clearBattleFastForward()
 end
 
-task.defer(function()
-	local battle = _G.F.getCurrentBattle()
-	if battle then
-		_G.F.applyBattleAnimationFastForward(battle, false, false)
-	end
-end)
+-- Post-load only: do not task.defer here. HttpGet between modules used to
+-- resume deferred callbacks before later modules finished defining _G.F.*.
 
 _G.F.getBattleProgressSignature = function(battle)
 	if type(battle) ~= "table" then
@@ -1160,12 +1156,8 @@ _G.F.installBattleGuiSafetyHooks = function(battleGui)
 	battleGui.__llsploitMainChoicesGuard = true
 end
 
-task.defer(function()
-	_G.F.installBattleGuiSafetyHooks()
-end)
-
--- installBattleCameraSafetyHooks lives in combat.lua; that module schedules
--- its own defer after the function is defined (HttpGet yields would race here).
+-- Post-load only: installBattleGuiSafetyHooks / installBattleCameraSafetyHooks
+-- are invoked from main.lua after every module has been executed.
 
 _G.F.findBattleRunButtonInGui = function()
 	local okPlayer, player = pcall(function()

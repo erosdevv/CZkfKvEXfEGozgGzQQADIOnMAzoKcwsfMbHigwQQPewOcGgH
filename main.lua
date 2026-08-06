@@ -6,7 +6,25 @@
 local BRANCH = "main"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/LLSPLOIT/" .. BRANCH
 
-local function loadModule(name)
+local MODULES = {
+	"boot",
+	"orion",
+	"globals",
+	"core",
+	"battle",
+	"world",
+	"combat",
+	"static",
+	"shops",
+	"catch",
+	"arcade",
+	"fossil",
+	"ui",
+}
+
+-- Two-phase load: download every module first (HttpGet yields), then run them
+-- back-to-back with no yields so task.defer/spawn cannot race unfinished modules.
+local function downloadModule(name)
 	local url = REPO .. "/modules/" .. name .. ".lua"
 	local src = game:HttpGet(url)
 	if type(src) ~= "string" or src == "" or src:sub(1, 3) == "404" then
@@ -16,10 +34,13 @@ local function loadModule(name)
 	if not chunk then
 		error("[LLSPLOIT] Compile error in '" .. name .. "': " .. tostring(compileErr))
 	end
-	-- Prefer shared _G so bare globals from each module are visible to the next.
 	if setfenv then
 		pcall(setfenv, chunk, getfenv and getfenv() or _G)
 	end
+	return chunk
+end
+
+local function runModule(name, chunk)
 	local ok, result = pcall(chunk)
 	if not ok then
 		error("[LLSPLOIT] Runtime error in '" .. name .. "': " .. tostring(result))
@@ -31,32 +52,27 @@ local function loadModule(name)
 	return result
 end
 
--- ─────────────────────────────────────────────────────────────────────────────
--- Load modules (order matters — later modules depend on earlier _G state)
--- ─────────────────────────────────────────────────────────────────────────────
-
-loadModule("boot")
-loadModule("orion")
-
-print("[LLSPLOIT] Orion library ready")
-if type(_G.__llsploitBootNotify) == "function" then
-	_G.__llsploitBootNotify("Orion ready, building UI...")
-elseif type(__llsploitBootNotify) == "function" then
-	__llsploitBootNotify("Orion ready, building UI...")
+local downloaded = {}
+for index, name in ipairs(MODULES) do
+	print("[LLSPLOIT] Downloading: " .. name)
+	downloaded[index] = {
+		name = name,
+		chunk = downloadModule(name),
+	}
 end
 
 local loadOk, loadErr = xpcall(function()
-	loadModule("globals")
-	loadModule("core")
-	loadModule("battle")
-	loadModule("world")
-	loadModule("combat")
-	loadModule("static")
-	loadModule("shops")
-	loadModule("catch")
-	loadModule("arcade")
-	loadModule("fossil")
-	loadModule("ui")
+	for _, entry in ipairs(downloaded) do
+		runModule(entry.name, entry.chunk)
+		if entry.name == "orion" then
+			print("[LLSPLOIT] Orion library ready")
+			if type(_G.__llsploitBootNotify) == "function" then
+				_G.__llsploitBootNotify("Orion ready, building UI...")
+			elseif type(__llsploitBootNotify) == "function" then
+				__llsploitBootNotify("Orion ready, building UI...")
+			end
+		end
+	end
 end, debug.traceback)
 
 if not loadOk then
@@ -67,14 +83,37 @@ if not loadOk then
 		__llsploitBootNotify("Load failed - check console (F9)")
 	end
 	pcall(function()
-		_G.OrionLib:MakeNotification({
-			Name = "LLSPLOIT",
-			Content = "Failed to load. Check the output console.",
-			Time = 8,
-		})
+		if _G.OrionLib then
+			_G.OrionLib:MakeNotification({
+				Name = "LLSPLOIT",
+				Content = "Failed to load. Check the output console.",
+				Time = 8,
+			})
+		end
 	end)
 	return
 end
+
+-- Safe to run now: every module has finished defining _G.F / automations.
+pcall(function()
+	local ok, found = pcall(_G.F.findP)
+	_G._p = ok and found or nil
+end)
+pcall(function()
+	_G.F.installBattleGuiSafetyHooks()
+end)
+pcall(function()
+	_G.F.installBattleCameraSafetyHooks()
+end)
+pcall(function()
+	_G.F.installGoppieCaptureNetworkHook()
+end)
+pcall(function()
+	local battle = _G.F.getCurrentBattle()
+	if battle then
+		_G.F.applyBattleAnimationFastForward(battle, false, false)
+	end
+end)
 
 _G.OrionLib:Init()
 
