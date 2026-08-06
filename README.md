@@ -29,7 +29,7 @@ Toggle the window with **RightShift** if it is hidden.
 | **Overview** | Money / Tix / BP + status |
 | **Farm** | Wild encounters, capture rules, fishing, Goppie formes, Use Spare / Corrupt Move |
 | **Hunts** | Static soft-resets + beast hunts |
-| **Battle** | Auto battle, Auto Heal (outdoor), fast-forward, prompt denies, Ignore NPC Battle, End Battle, trainer farming |
+| **Battle** | Auto battle, Auto Heal (outdoor), Fast Battle (anim/fillbar hooks), Skip Dialogue hooks, prompt denies, Ignore NPC Battle, End Battle, trainer farming |
 | **Rally** | Auto rally keep/release rules |
 | **Storage** | Boonary cleanup, repel / PC helpers |
 | **Fossil** | Petrolith revive automation |
