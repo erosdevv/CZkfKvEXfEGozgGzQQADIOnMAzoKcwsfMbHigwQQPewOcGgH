@@ -1611,7 +1611,12 @@ task.spawn(function()
 	local lastFailureNoticeAt = 0
 
 	while _G.uiAlive do
-		if _G.autoEncounterEnabled then
+		local trainerSelected = type(_G.jackAutoBattle) == "table"
+			and _G.jackAutoBattle.Trainer
+			and _G.jackAutoBattle.Trainer ~= "Disabled"
+
+		-- Trainer Target owns Auto Battle starts; skip wild grass while a trainer is selected.
+		if _G.autoEncounterEnabled and not trainerSelected then
 			if type(_G._p) ~= "table" then
 				_G._p = _G.F.findP()
 			end
