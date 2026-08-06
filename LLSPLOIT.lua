@@ -1,5 +1,8 @@
 -- LLSPLOIT: full script with native Orion UI (OrionUI.lua) + all game features.
--- Execute this file. OrionUI.lua is the standalone UI library source.
+-- Execute this file, or loadstring it from the raw GitHub URL:
+--   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/main/LLSPLOIT.lua"))()
+-- Or use the loader:
+--   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/LLSPLOIT/main/main.lua"))()
 -- In Potassium with console hidden, run Run.lua instead.
 local function __llsploitBootNotify(text)
 	pcall(function()
