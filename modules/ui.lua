@@ -308,6 +308,42 @@ _G.configUi.autoBattleToggle = _G.BattleTab:AddToggle({
 	end
 })
 
+_G.BattleTab:AddSection({ Name = "Auto Heal" })
+
+_G.configUi.autoHealToggle = _G.BattleTab:AddToggle({
+	Name = "Auto Heal (Outdoor Only)",
+	Default = _G.autoHealEnabled,
+	Color = Color3.fromRGB(120, 255, 160),
+	Callback = function(value)
+		_G.autoHealEnabled = value and true or false
+	end
+})
+
+_G.configUi.autoHealDelay = _G.BattleTab:AddSlider({
+	Name = "Auto Heal Delay",
+	Min = 3,
+	Max = 60,
+	Increment = 1,
+	Default = _G.autoHealDelay,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoHealDelay = value
+	end
+})
+
+_G.BattleTab:AddButton({
+	Name = "Heal Once",
+	Icon = "heart-pulse",
+	Callback = function()
+		local ok, reason = _G.F.runAutoHealOnce(true)
+		_G.OrionLib:MakeNotification({
+			Name = "Auto Heal",
+			Content = ok and "Heal action sent." or tostring(reason),
+			Time = ok and 3 or 5
+		})
+	end
+})
+
 
 _G.BattleTab:AddSection({ Name = "Battle Speed" })
 
@@ -658,40 +694,6 @@ informationBoonarySection:AddButton({
 
 
 local collectionUtilitySection = _G.StorageTab:AddSection({ Name = "Party Items & PC" })
-
-_G.configUi.autoHealToggle = collectionUtilitySection:AddToggle({
-	Name = "Auto Heal",
-	Default = _G.autoHealEnabled,
-	Color = Color3.fromRGB(120, 255, 160),
-	Callback = function(value)
-		_G.autoHealEnabled = value and true or false
-	end
-})
-
-_G.configUi.autoHealDelay = collectionUtilitySection:AddSlider({
-	Name = "Auto Heal Delay",
-	Min = 3,
-	Max = 60,
-	Increment = 1,
-	Default = _G.autoHealDelay,
-	ValueName = "s",
-	Callback = function(value)
-		_G.autoHealDelay = value
-	end
-})
-
-collectionUtilitySection:AddButton({
-	Name = "Heal Once",
-	Icon = "heart-pulse",
-	Callback = function()
-		local ok, reason = _G.F.runAutoHealOnce(true)
-		_G.OrionLib:MakeNotification({
-			Name = "Auto Heal",
-			Content = ok and "Heal action sent." or tostring(reason),
-			Time = ok and 3 or 5
-		})
-	end
-})
 
 _G.configUi.activeRepellentToggle = collectionUtilitySection:AddToggle({
 	Name = "Active Repellent",
