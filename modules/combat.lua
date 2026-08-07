@@ -513,11 +513,6 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		return
 	end
 
-	-- MrJack hard-requires RematchQuestion before mapping/list insert.
-	if not trainerData.RematchQuestion then
-		return
-	end
-
 	local trainerName = trainerData.Name or trainerData.name
 	if type(trainerName) ~= "string" or trainerName == "" then
 		return
@@ -530,11 +525,11 @@ _G.F.jackProcessTrainerNpc = function(npc)
 		battleKey = tostring(battleId),
 	}
 
-	-- MrJack insert gate: UV5 is Battle.setupScene (always truthy), so list
-	-- insert effectively requires regionData.BattleScene.
+	-- Prefer RematchQuestion trainers; also allow BattleScene chunks so routes
+	-- without RematchQuestion still populate Trainer Target (pre-tighten OR).
 	local regionData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "regionData") or nil
 	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene and true or false
-	if hasBattleScene and not table.find(_G.jackTrainerList, trainerName) then
+	if (trainerData.RematchQuestion or hasBattleScene) and not table.find(_G.jackTrainerList, trainerName) then
 		table.insert(_G.jackTrainerList, trainerName)
 	end
 end
@@ -1023,6 +1018,25 @@ _G.F.jackStartBattleLoops = function()
 		end
 	end)
 
+	-- Keep battle.fastForward latched hard while Fast Battle is on.
+	task.spawn(function()
+		while _G.uiAlive do
+			if _G.fastForwardEnabled then
+				local battle = _G.F.jackGetBattle() or _G.F.getCurrentBattle()
+				if type(battle) == "table" then
+					_G.F.setBattleFastForward(true, battle)
+					pcall(function()
+						local chat = type(_G._p) == "table" and _G._p.NPCChat or nil
+						if type(chat) == "table" then
+							chat.fastForward = true
+						end
+					end)
+				end
+			end
+			task.wait(0.05)
+		end
+	end)
+
 	task.spawn(function()
 		while _G.uiAlive do
 			if _G.jackAutoBattle.Move ~= "Disabled" then
@@ -1038,7 +1052,9 @@ _G.F.jackStartBattleLoops = function()
 		while _G.uiAlive do
 			local battle = _G.F.jackGetBattle()
 			if battle and _G.jackAutoBattle.Trainer ~= "Disabled" then
-				_G.F.setBattleFastForward(true, battle)
+				if _G.fastForwardEnabled then
+					_G.F.setBattleFastForward(true, battle)
+				end
 				_G.F.skipEncounterCutscene(battle)
 				pcall(function()
 					_G.F.dismissTrainerSwitchPrompt()
@@ -1645,14 +1661,10 @@ _G.F.jackWrapNamedMethod = function(host, methodName, wrapperFactory)
 		return false
 	end
 
-	local original = host[methodName]
+	_G.jackFastBattleHookOriginals[host] = _G.jackFastBattleHookOriginals[host] or {}
+	local original = _G.jackFastBattleHookOriginals[host][methodName] or host[methodName]
 	if type(original) ~= "function" then
 		return false
-	end
-
-	_G.jackFastBattleHookOriginals[host] = _G.jackFastBattleHookOriginals[host] or {}
-	if _G.jackFastBattleHookOriginals[host][methodName] then
-		return true
 	end
 
 	_G.jackFastBattleHookOriginals[host][methodName] = original
@@ -1683,21 +1695,11 @@ _G.F.jackInstallFastBattleHooks = function()
 
 		_G.F.jackWrapNamedMethod(battleGui, "setCameraIfLookingAway", function(original)
 			return function(self, battle, ...)
-				local previous = nil
-				if type(battle) == "table" then
-					previous = battle.fastForward
-					if _G.fastForwardEnabled then
-						battle.fastForward = true
-					end
+				if type(battle) == "table" and _G.fastForwardEnabled then
+					battle.fastForward = true
 				end
 				_G.F.jackEnterGameContext()
-				local ok, a, b, c = pcall(original, self, battle, ...)
-				if type(battle) == "table" then
-					battle.fastForward = previous or false
-				end
-				if ok then
-					return a, b, c
-				end
+				return original(self, battle, ...)
 			end
 		end)
 	end
@@ -1721,16 +1723,13 @@ _G.F.jackInstallFastBattleHooks = function()
 				local packed = { ... }
 				local owner = packed[battleIndex]
 				local battle = type(owner) == "table" and (owner.battle or owner) or nil
-				local previous = nil
-				if type(battle) == "table" then
-					previous = battle.fastForward
-					battle.fastForward = _G.fastForwardEnabled and true or false
+				if type(battle) == "table" and _G.fastForwardEnabled then
+					-- Keep fastForward latched for the whole battle while Fast Battle
+					-- is on. Restoring false after every anim was killing turbo speed.
+					battle.fastForward = true
 				end
 				_G.F.jackEnterGameContext()
 				local results = { pcall(original, ...) }
-				if type(battle) == "table" then
-					battle.fastForward = previous or false
-				end
 				if results[1] then
 					return unpack(results, 2)
 				end
@@ -1742,7 +1741,8 @@ _G.F.jackInstallFastBattleHooks = function()
 	if type(sprite) == "table" then
 		for _, methodName in ipairs({
 			"animFaint", "animSummon", "animUnsummon", "monsterIn", "monsterOut",
-			"animEmulate", "animScapegoat", "animScapegoatIn", "animScapegoatOut", "animRecolor",
+			"animEmulate", "animScapegoat", "animScapegoatIn", "animScapegoatOut",
+			"animScapegoatFade", "animRecolor",
 		}) do
 			wrapFastForwardBracket(sprite, methodName, 1)
 		end
