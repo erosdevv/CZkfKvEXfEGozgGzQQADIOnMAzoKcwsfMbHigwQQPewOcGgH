@@ -554,19 +554,8 @@ _G.F.jackScanTrainerNpcs = function()
 		return
 	end
 
-	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
-	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
-		return
-	end
-
-	local ok, npcs = pcall(function()
-		return collectionManager:GetNPCs()
-	end)
-	if not ok or type(npcs) ~= "table" then
-		return
-	end
-
-	-- MrJack builds Names from chunk.battles and prunes stale dropdown entries.
+	-- Prune against current chunk.battles before GetNPCs so a failed NPC scan
+	-- cannot leave previous-chunk trainer names in the dropdown.
 	local battleNames = {}
 	for _, battleData in pairs(battles) do
 		if type(battleData) == "table" then
@@ -584,6 +573,24 @@ _G.F.jackScanTrainerNpcs = function()
 			_G.jackTrainerConfigs[name] = nil
 			_G.jackTrainerBattleKeys[name] = nil
 		end
+	end
+
+	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
+	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
+		table.sort(_G.jackTrainerList, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		return
+	end
+
+	local ok, npcs = pcall(function()
+		return collectionManager:GetNPCs()
+	end)
+	if not ok or type(npcs) ~= "table" then
+		table.sort(_G.jackTrainerList, function(a, b)
+			return tostring(a) < tostring(b)
+		end)
+		return
 	end
 
 	-- MrJack ForLooP iterates the full GetNPCs map (not ipairs-only).
@@ -1346,6 +1353,7 @@ _G.F.syncJackMiscSettings = function()
 	_G.jackMiscSettings.NoSwitch = _G.denySwitchRequestEnabled and true or false
 	_G.jackMiscSettings.NoNewMoves = _G.denyReassignMoveEnabled and true or false
 	_G.jackMiscSettings.NoProgress = _G.disableShowProgressEnabled and true or false
+	_G.jackMiscSettings["Skip Dialogue"] = _G.skipDialogueEnabled and true or false
 end
 
 -- MrJack Ignore NPC Battle: wrap BitBuffer.GetBit so trainers already seen on
@@ -1461,25 +1469,18 @@ _G.F.processJackNpcChatSay = function(args)
 		args = { args }
 	end
 
-	local textIndex = nil
-	local text = nil
-	for i = 2, math.min(#args, 4) do
-		if type(args[i]) == "string" and string.lower(string.sub(args[i], 1, 5)) == "[y/n]" then
-			textIndex = i
-			text = args[i]
-			break
-		end
-	end
+	_G.F.syncJackMiscSettings()
 
-	if not text and type(args[2]) == "string" then
-		textIndex = 2
-		text = args[2]
-	end
-
+	local text = args[2]
 	if type(text) ~= "string" then
+		-- MrJack: non-string still ends as "call original" when Skip is off.
+		if not _G.jackMiscSettings["Skip Dialogue"] then
+			return args, true
+		end
 		return args, false
 	end
 
+	-- [NoSkip] bypass: strip tag and always show.
 	if string.sub(text, 1, 8) == "[NoSkip]" then
 		local stripped = { args[1], string.sub(text, 9) }
 		for i = 3, #args do
@@ -1490,59 +1491,91 @@ _G.F.processJackNpcChatSay = function(args)
 
 	local isYn = string.lower(string.sub(text, 1, 5)) == "[y/n]"
 	if isYn then
+		-- MrJack deny: rewrite away from [y/n] so the prompt is no longer interactive.
 		if _G.jackMiscSettings.NoSwitch and string.find(text, "Will you switch Loomians", 1, true) then
-			args[textIndex] = "Auto Deny Swicth Question Enabled!"
-			return args, true
-		end
-
-		if _G.jackMiscSettings.NoNick and string.find(text, "Give a nickname to the", 1, true) then
-			args[textIndex] = "Auto Deny Nickname Enabled!"
-			return args, true
-		end
-
-		if _G.jackMiscSettings.NoNewMoves then
-			local lower = string.lower(text)
-			if string.find(lower, "reassign its moves", 1, true) then
-				args[textIndex] = "Auto Deny Reassign Move Enabled!"
-				return args, true
-			end
-			if string.find(lower, " to give up on learning ", 1, true) then
+			args[2] = "Auto Deny Swicth Question Enabled!"
+		elseif _G.jackMiscSettings.NoNick and string.find(text, "Give a nickname to the", 1, true) then
+			args[2] = "Auto Deny Nickname Enabled!"
+		elseif _G.jackMiscSettings.NoNewMoves then
+			if string.find(text, "reassign its moves", 1, true) then
+				args[2] = "Auto Deny Reassign Move Enabled!"
+			elseif string.find(text, " to give up on learning ", 1, true) then
+				-- Instant auto-answer; wrapper returns true without calling original.
 				return "Y/N", true
 			end
 		end
 	end
 
-	-- MrJack Skip Dialogue: strip [y/n] / [gamepad] prefixes so prompts and
-	-- dialogue advance through the hooked Say/message path (poll remains as backup).
-	if _G.skipDialogueEnabled then
-		local out = {}
-		local changed = false
-		for i = 1, #args do
-			local value = args[i]
-			if type(value) == "string" then
-				local s = value
-				local lowerPrefix5 = string.lower(string.sub(s, 1, 5))
-				local lowerPrefix9 = string.lower(string.sub(s, 1, 9))
-				if lowerPrefix5 == "[y/n]" then
-					s = string.sub(s, 6)
-					changed = true
-				elseif lowerPrefix9 == "[gamepad]" then
-					s = string.sub(s, 10)
-					changed = true
-				else
-					changed = true
-				end
-				out[i] = s
-			else
-				out[i] = value
+	if not _G.jackMiscSettings["Skip Dialogue"] then
+		-- Skip off: always invoke original (deny rewrites already applied).
+		return args, true
+	end
+
+	-- Skip Dialogue on (MrJack rebuild):
+	-- - strip [y/n] / [gamepad]
+	-- - drop [pma] lines
+	-- - keep [ma] lines and force call
+	-- - normal lines: collect but leave callOriginal false so wrapper suppresses original
+	local out = {}
+	local callOriginal = false
+	for i = 1, #args do
+		local value = args[i]
+		if type(value) ~= "string" then
+			out[#out + 1] = value
+		else
+			local s = value
+			local lower5 = string.lower(string.sub(s, 1, 5))
+			local lower9 = string.lower(string.sub(s, 1, 9))
+
+			if lower5 == "[y/n]" then
+				s = string.sub(s, 6)
+				callOriginal = true
+			elseif lower9 == "[gamepad]" then
+				s = string.sub(s, 10)
+				callOriginal = true
 			end
-		end
-		if changed then
-			return out, true
+
+			local prefix4 = string.lower(string.sub(s, 1, 4))
+			local prefix5 = string.lower(string.sub(s, 1, 5))
+			if prefix4 == "[ma]" and prefix5 ~= "[pma]" then
+				out[#out + 1] = value
+				callOriginal = true
+			elseif prefix5 == "[pma]" then
+				-- Drop MrJack private/meta lines.
+			else
+				out[#out + 1] = s
+			end
 		end
 	end
 
-	return args, false
+	return out, callOriginal
+end
+
+_G.F.jackNpcChatHandlerInvoke = function(original, ...)
+	_G.F.syncJackMiscSettings()
+	local packed = { ... }
+	local first, callOriginal = _G.F.processJackNpcChatSay(packed)
+
+	-- MrJack: return the boolean auto-answer without showing the prompt.
+	if first == "Y/N" then
+		return callOriginal
+	end
+
+	-- MrJack: when Skip Dialogue swallows a line, do not call original.
+	if not callOriginal then
+		return
+	end
+
+	local chat = type(_G._p) == "table" and _G._p.NPCChat or nil
+	if type(chat) == "table" and _G.jackMiscSettings["Skip Dialogue"] then
+		chat.fastForward = true
+	end
+
+	_G.F.jackEnterGameContext()
+	if type(first) == "table" then
+		return original(unpack(first))
+	end
+	return original(...)
 end
 
 _G.F.wrapJackNpcChatHandler = function(host, methodName)
@@ -1550,48 +1583,16 @@ _G.F.wrapJackNpcChatHandler = function(host, methodName)
 		return
 	end
 
-	local original = host[methodName]
+	local originals = _G.jackNpcChatHookOriginals[host]
+	local original = (type(originals) == "table" and originals[methodName]) or host[methodName]
 	if type(original) ~= "function" then
 		return
 	end
 
 	_G.jackNpcChatHookOriginals[host] = _G.jackNpcChatHookOriginals[host] or {}
-	if _G.jackNpcChatHookOriginals[host][methodName] then
-		return
-	end
-
 	_G.jackNpcChatHookOriginals[host][methodName] = original
 	host[methodName] = function(...)
-		_G.F.syncJackMiscSettings()
-		local packed = { ... }
-		local first, filtered = _G.F.processJackNpcChatSay(packed)
-
-		if first == "Y/N" then
-			return filtered
-		end
-
-		if filtered then
-			local chat = type(_G._p) == "table" and _G._p.NPCChat or nil
-			if type(chat) == "table" then
-				if _G.skipDialogueEnabled then
-					chat.fastForward = true
-				end
-				if type(chat.choose) == "function" then
-					-- Deny path for rewritten Y/N prompts (NoSwitch / NoNick / NoNewMoves).
-					local text = type(first) == "table" and first[2] or nil
-					if type(text) == "string" and string.find(text, "Auto Deny", 1, true) then
-						pcall(function()
-							chat:choose(2)
-						end)
-					end
-				end
-			end
-			_G.F.jackEnterGameContext()
-			return original(unpack(first))
-		end
-
-		_G.F.jackEnterGameContext()
-		return original(...)
+		return _G.F.jackNpcChatHandlerInvoke(original, ...)
 	end
 end
 
@@ -1627,6 +1628,9 @@ _G.F.jackInstallSwitchMonsterBusyHook = function()
 		if results[1] then
 			return unpack(results, 2)
 		end
+
+		-- Propagate real switchMonster failures so callers don't treat them as success.
+		error(results[2], 0)
 	end
 
 	battleGui.__jackSwitchMonsterHooked = true
