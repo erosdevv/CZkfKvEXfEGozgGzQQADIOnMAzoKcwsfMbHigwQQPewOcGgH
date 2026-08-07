@@ -358,6 +358,10 @@ _G.jackTrainerList = _G.jackTrainerList or {}
 _G.jackTrainerConfigs = _G.jackTrainerConfigs or {}
 _G.jackTrainerBattleKeys = _G.jackTrainerBattleKeys or {}
 _G.jackBattleLoopsStarted = _G.jackBattleLoopsStarted or false
+_G.jackTrainerStartPending = _G.jackTrainerStartPending or false
+_G.jackTrainerStartAt = _G.jackTrainerStartAt or 0
+_G.jackLastTrainerFailReason = _G.jackLastTrainerFailReason or nil
+_G.jackLastTrainerFailNoticeAt = _G.jackLastTrainerFailNoticeAt or 0
 
 _G.F.jackGetBattle = function()
 	if not _G.F.ensureP() then
@@ -380,6 +384,32 @@ _G.F.jackHasBattleGuiInstance = function()
 	return mainGui and mainGui:FindFirstChild("BattleGui", true) or nil
 end
 
+_G.F.jackIsTrainerStartBusy = function()
+	if _G.F.jackGetBattle() then
+		return true
+	end
+	if _G.F.jackHasBattleGuiInstance() then
+		return true
+	end
+	if _G.jackTrainerStartPending then
+		local age = os.clock() - (tonumber(_G.jackTrainerStartAt) or 0)
+		if age < 3.0 then
+			return true
+		end
+		_G.jackTrainerStartPending = false
+	end
+	return false
+end
+
+_G.F.jackMarkTrainerStartPending = function()
+	_G.jackTrainerStartPending = true
+	_G.jackTrainerStartAt = os.clock()
+end
+
+_G.F.jackClearTrainerStartPending = function()
+	_G.jackTrainerStartPending = false
+end
+
 _G.F.jackCanStartTrainerBattle = function()
 	if _G.jackOutdoorHealRunning then
 		return false
@@ -393,6 +423,61 @@ _G.F.jackCanStartTrainerBattle = function()
 	end
 
 	return true
+end
+
+_G.F.jackEnsureReadyForTrainer = function()
+	-- When farming a trainer with Auto Heal, don't wait on the slow heal slider
+	-- delay — heal immediately once the party is not full HP.
+	if not _G.autoHealEnabled then
+		return true, nil
+	end
+	if _G.F.isPartyFullHealth() then
+		return true, nil
+	end
+	if _G.jackOutdoorHealRunning then
+		return false, "Waiting for outdoor heal."
+	end
+
+	local ok, reason = _G.F.runAutoHealOnce(false)
+	if ok then
+		return false, "Healing before next trainer."
+	end
+	return false, reason or "Waiting for heal."
+end
+
+_G.F.jackReportTrainerFail = function(reason)
+	if type(reason) ~= "string" or reason == "" then
+		return
+	end
+
+	_G.jackLastTrainerFailReason = reason
+	local now = os.clock()
+	if now - (tonumber(_G.jackLastTrainerFailNoticeAt) or 0) < 6 then
+		return
+	end
+
+	-- Skip noisy transient gates.
+	local quiet = {
+		["Waiting for outdoor heal."] = true,
+		["Healing before next trainer."] = true,
+		["Trainer start already pending."] = true,
+		["Walk is disabled."] = true,
+		["Menu is disabled."] = true,
+	}
+	if quiet[reason] then
+		return
+	end
+
+	_G.jackLastTrainerFailNoticeAt = now
+	pcall(function()
+		if _G.OrionLib and type(_G.OrionLib.MakeNotification) == "function" then
+			_G.OrionLib:MakeNotification({
+				Name = "Auto Trainer",
+				Content = reason,
+				Time = 4,
+			})
+		end
+	end)
 end
 
 _G.F.jackEnterGameContext = function()
@@ -729,6 +814,18 @@ end
 -- only when the set of ids/names actually changes (unless forceUi is true).
 _G.F.jackRefreshTrainerTargetFromChunk = function(forceUi)
 	local entries = _G.F.jackCollectBattleableTrainers()
+
+	-- Don't wipe a good catalog on a brief GetNPCs/workspace miss — that made
+	-- Auto Trainer flicker between "works" and "NPC not loaded".
+	if (not entries or #entries == 0) and type(_G.jackBattleableTrainers) == "table" and #_G.jackBattleableTrainers > 0 then
+		local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+		local currentChunk = type(dataManager) == "table" and _G.F.safeTableGet(dataManager, "currentChunk") or nil
+		local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+		if type(battles) == "table" and next(battles) ~= nil and forceUi ~= true then
+			return _G.jackBattleableTrainers
+		end
+	end
+
 	_G.F.jackApplyBattleableCatalog(entries)
 
 	local signature = _G.F.getJackTrainerListSignature()
@@ -1161,6 +1258,7 @@ _G.F.jackRunAutoTrainerTick = function()
 	local battleId = _G.F.jackNormalizeTrainerTarget(_G.jackAutoBattle.Trainer)
 	_G.jackAutoBattle.Trainer = battleId
 	if battleId == "Disabled" then
+		_G.F.jackClearTrainerStartPending()
 		return false
 	end
 
@@ -1168,34 +1266,60 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false
 	end
 
+	-- Already in / starting a battle — do not spam doTrainerBattle.
+	if _G.F.jackIsTrainerStartBusy() then
+		if _G.F.jackGetBattle() or _G.F.jackHasBattleGuiInstance() then
+			_G.F.jackClearTrainerStartPending()
+		end
+		return false, "Trainer start already pending."
+	end
+
+	local ready, healReason = _G.F.jackEnsureReadyForTrainer()
+	if not ready then
+		_G.F.jackReportTrainerFail(healReason)
+		return false, healReason
+	end
+
 	local resolved, reason = _G.F.jackResolveTrainerTarget(battleId)
 	if not resolved then
-		return false, reason
+		-- Catalog/NPC can briefly unload; refresh once then retry resolve.
+		pcall(_G.F.jackRefreshTrainerTargetFromChunk, false)
+		resolved, reason = _G.F.jackResolveTrainerTarget(battleId)
+		if not resolved then
+			_G.F.jackReportTrainerFail(reason or "Trainer not available.")
+			return false, reason
+		end
 	end
 
 	local opponentBaseNPC = resolved.opponentBaseNPC
 	if not _G.F.jackNpcInWorkspace(opponentBaseNPC) then
-		return false, "Trainer NPC is not loaded."
+		opponentBaseNPC = _G.F.jackFindNpcByBattleId(battleId)
+		if not opponentBaseNPC then
+			_G.F.jackReportTrainerFail("NPC for trainer #" .. tostring(battleId) .. " is not loaded.")
+			return false, "Trainer NPC is not loaded."
+		end
+		resolved.opponentBaseNPC = opponentBaseNPC
 	end
 
 	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 	if type(masterControl) == "table" and masterControl.WalkEnabled == false then
-		return false
+		return false, "Walk is disabled."
 	end
 
-	local activeBattle = _G.F.jackGetBattle()
-	if activeBattle then
-		return false
+	local menu = _G.F.safeTableGet(_G._p, "Menu")
+	if type(menu) == "table" and menu.enabled == false then
+		return false, "Menu is disabled."
 	end
 
 	local playerData = _G.F.safeTableGet(_G._p, "PlayerData")
 	local completedEvents = type(playerData) == "table" and _G.F.safeTableGet(playerData, "completedEvents") or nil
 	if type(completedEvents) == "table" and not completedEvents.ChooseBeginner then
-		return false
+		return false, "Beginner not chosen yet."
 	end
 
 	if not _G.F.jackCanStartTrainerBattle() then
-		return false
+		_G.F.jackReportTrainerFail("Waiting for heal gate.")
+		return false, "Waiting for heal gate."
 	end
 
 	local trainerData = resolved.trainer
@@ -1211,16 +1335,25 @@ _G.F.jackRunAutoTrainerTick = function()
 
 	local battleModule = _G.F.safeTableGet(_G._p, "Battle")
 	if type(battleModule) ~= "table" or type(battleModule.doTrainerBattle) ~= "function" then
+		_G.F.jackReportTrainerFail("Battle.doTrainerBattle is not ready.")
 		return false, "Battle.doTrainerBattle is not ready."
 	end
+
+	-- Latch before the yieldy call so overlapping ticks cannot double-start.
+	_G.F.jackMarkTrainerStartPending()
+	_G.F.jackInstallDoTrainerBattleHook()
+	_G.F.jackEnterGameContext()
 
 	local ok, err = pcall(function()
 		battleModule:doTrainerBattle(battleConfig)
 	end)
 	if not ok then
+		_G.F.jackClearTrainerStartPending()
+		_G.F.jackReportTrainerFail(tostring(err))
 		return false, tostring(err)
 	end
 
+	_G.jackLastTrainerFailReason = nil
 	return true
 end
 
@@ -1271,8 +1404,11 @@ _G.F.jackStartBattleLoops = function()
 
 	task.spawn(function()
 		while _G.uiAlive do
+			local trainerSelected = _G.jackAutoBattle.Trainer ~= "Disabled"
 			local battle = _G.F.jackGetBattle()
-			if battle and _G.jackAutoBattle.Trainer ~= "Disabled" then
+
+			if battle and trainerSelected then
+				_G.F.jackClearTrainerStartPending()
 				if _G.fastForwardEnabled then
 					_G.F.setBattleFastForward(true, battle)
 				end
@@ -1283,11 +1419,13 @@ _G.F.jackStartBattleLoops = function()
 				pcall(function()
 					_G.F.dismissMasteryReport()
 				end)
-			elseif _G.jackAutoBattle.Trainer ~= "Disabled" then
-				_G.F.jackRunAutoTrainerTick()
+			elseif trainerSelected then
+				pcall(_G.F.jackRunAutoTrainerTick)
 			end
 
-			if _G.jackAutoBattle.Trainer ~= "Disabled" then
+			-- Never clear/skip NPC chat while a trainer start is in-flight —
+			-- that was cancelling rematch [y/n] prompts and made starts flaky.
+			if trainerSelected and not _G.jackTrainerStartPending then
 				pcall(function()
 					_G.F.clickThroughNpcChat()
 				end)
@@ -1730,6 +1868,21 @@ _G.F.processJackNpcChatSay = function(args)
 
 	local isYn = string.lower(string.sub(text, 1, 5)) == "[y/n]"
 	if isYn then
+		local lowerText = string.lower(text)
+		-- Auto-accept rematch / battle-again prompts while a trainer is selected.
+		-- Clearing these mid-start was a major Auto Trainer inconsistency source.
+		local trainerSelected = type(_G.jackAutoBattle) == "table"
+			and _G.jackAutoBattle.Trainer
+			and _G.jackAutoBattle.Trainer ~= "Disabled"
+		if trainerSelected and (
+			string.find(lowerText, "rematch", 1, true)
+			or string.find(lowerText, "battle again", 1, true)
+			or string.find(lowerText, "fight again", 1, true)
+			or string.find(lowerText, "want to battle", 1, true)
+		) then
+			return "Y/N", true
+		end
+
 		-- MrJack deny: rewrite away from [y/n] so the prompt is no longer interactive.
 		if _G.jackMiscSettings.NoSwitch and string.find(text, "Will you switch Loomians", 1, true) then
 			args[2] = "Auto Deny Swicth Question Enabled!"
@@ -2615,6 +2768,11 @@ _G.F.skipTrainerText = function()
 end
 
 _G.F.clickThroughNpcChat = function()
+	-- Protect in-flight trainer starts (especially rematch [y/n]).
+	if _G.jackTrainerStartPending then
+		return
+	end
+
 	_G.F.skipTrainerText()
 
 	pcall(function()
