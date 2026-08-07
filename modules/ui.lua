@@ -1883,8 +1883,6 @@ do
 	end)
 end
 
-end
-
 
 task.spawn(function()
 	local lastFailure = nil
