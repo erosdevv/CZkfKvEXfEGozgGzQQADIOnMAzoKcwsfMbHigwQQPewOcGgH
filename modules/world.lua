@@ -1536,8 +1536,9 @@ _G.F.openDeveloperConsole = function()
 	return true
 end
 
--- Apply another UserId's HumanoidDescription onto the local character.
--- Uses the real avatar (no fake overlay), so animation packs / Animate work normally.
+-- Client-side avatar morph: ApplyDescription is server-only, so we build a
+-- description model locally, strip the live character's cosmetics, then copy
+-- clothing / accessories / face / scales / Animate pack IDs onto it.
 _G.localAvatarState = _G.localAvatarState or {
 	characterConn = nil,
 	originalDescription = nil,
@@ -1594,6 +1595,280 @@ _G.F.captureOriginalAvatarDescription = function(humanoid)
 	end
 end
 
+_G.F.clearCharacterCosmetics = function(character)
+	if not character then
+		return
+	end
+
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("Accessory")
+			or child:IsA("Shirt")
+			or child:IsA("Pants")
+			or child:IsA("ShirtGraphic")
+			or child:IsA("BodyColors")
+			or child:IsA("CharacterMesh")
+			or child:IsA("BodyPartDescription")
+			or child.Name == "Shirt"
+			or child.Name == "Pants" then
+			pcall(function()
+				child:Destroy()
+			end)
+		end
+	end
+end
+
+_G.F.applyHumanoidScalesFromDescription = function(humanoid, description)
+	if not humanoid or not description then
+		return
+	end
+
+	local mapping = {
+		BodyDepthScale = "DepthScale",
+		BodyHeightScale = "HeightScale",
+		BodyWidthScale = "WidthScale",
+		HeadScale = "HeadScale",
+		BodyProportionScale = "ProportionScale",
+		BodyTypeScale = "BodyTypeScale",
+	}
+
+	for valueName, propName in pairs(mapping) do
+		local valueObject = humanoid:FindFirstChild(valueName)
+		local scale = nil
+		pcall(function()
+			scale = description[propName]
+		end)
+		if valueObject and valueObject:IsA("NumberValue") and type(scale) == "number" then
+			pcall(function()
+				valueObject.Value = scale
+			end)
+		end
+	end
+end
+
+_G.F.copyHeadFaceFromModel = function(sourceModel, targetCharacter)
+	local srcHead = sourceModel and sourceModel:FindFirstChild("Head")
+	local dstHead = targetCharacter and targetCharacter:FindFirstChild("Head")
+	if not srcHead or not dstHead then
+		return
+	end
+
+	for _, child in ipairs(dstHead:GetChildren()) do
+		if child:IsA("Decal") and string.lower(child.Name) == "face" then
+			pcall(function()
+				child:Destroy()
+			end)
+		end
+	end
+
+	for _, child in ipairs(srcHead:GetChildren()) do
+		if child:IsA("Decal") and string.lower(child.Name) == "face" then
+			pcall(function()
+				child:Clone().Parent = dstHead
+			end)
+		end
+	end
+end
+
+_G.F.attachAccessoryToCharacter = function(humanoid, character, accessory)
+	if not accessory then
+		return false
+	end
+
+	local clone = accessory:Clone()
+	local added = false
+	if humanoid then
+		local ok = pcall(function()
+			humanoid:AddAccessory(clone)
+		end)
+		added = ok and clone.Parent ~= nil
+	end
+
+	if not added then
+		pcall(function()
+			clone.Parent = character
+		end)
+	end
+
+	for _, part in ipairs(clone:GetDescendants()) do
+		if part:IsA("BasePart") then
+			pcall(function()
+				part.CanCollide = false
+				part.Massless = true
+			end)
+		end
+	end
+
+	return clone.Parent ~= nil
+end
+
+_G.F.syncAnimateFromModel = function(sourceModel, targetCharacter)
+	local srcAnimate = sourceModel and sourceModel:FindFirstChild("Animate")
+	local dstAnimate = targetCharacter and targetCharacter:FindFirstChild("Animate")
+	if not srcAnimate or not dstAnimate then
+		return false
+	end
+
+	local function copyAnimIds(srcFolder, dstFolder)
+		if not srcFolder or not dstFolder then
+			return
+		end
+
+		-- Map destination Animation / StringValue children by name, then by order.
+		local dstAnims = {}
+		local dstStrings = {}
+		for _, child in ipairs(dstFolder:GetChildren()) do
+			if child:IsA("Animation") then
+				table.insert(dstAnims, child)
+			elseif child:IsA("StringValue") then
+				table.insert(dstStrings, child)
+			end
+		end
+
+		local animIndex = 0
+		local stringIndex = 0
+		for _, child in ipairs(srcFolder:GetChildren()) do
+			if child:IsA("Animation") and child.AnimationId and child.AnimationId ~= "" then
+				animIndex = animIndex + 1
+				local dst = dstFolder:FindFirstChild(child.Name)
+				if not (dst and dst:IsA("Animation")) then
+					dst = dstAnims[animIndex]
+				end
+				if dst and dst:IsA("Animation") then
+					pcall(function()
+						dst.AnimationId = child.AnimationId
+					end)
+				else
+					pcall(function()
+						local created = child:Clone()
+						created.Parent = dstFolder
+					end)
+				end
+			elseif child:IsA("StringValue") and child.Value and child.Value ~= "" then
+				stringIndex = stringIndex + 1
+				local dst = dstFolder:FindFirstChild(child.Name)
+				if not (dst and dst:IsA("StringValue")) then
+					dst = dstStrings[stringIndex]
+				end
+				if dst and dst:IsA("StringValue") then
+					pcall(function()
+						dst.Value = child.Value
+					end)
+				end
+
+				-- Nested Animation under StringValue (classic Animate layout).
+				for _, nested in ipairs(child:GetChildren()) do
+					if nested:IsA("Animation") and nested.AnimationId and nested.AnimationId ~= "" then
+						local dstNested = dst and dst:FindFirstChild(nested.Name)
+						if dstNested and dstNested:IsA("Animation") then
+							pcall(function()
+								dstNested.AnimationId = nested.AnimationId
+							end)
+						elseif dst then
+							local existing = dst:FindFirstChildOfClass("Animation")
+							if existing then
+								pcall(function()
+									existing.AnimationId = nested.AnimationId
+								end)
+							else
+								pcall(function()
+									nested:Clone().Parent = dst
+								end)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	for _, folder in ipairs(srcAnimate:GetChildren()) do
+		local dstFolder = dstAnimate:FindFirstChild(folder.Name)
+		if not dstFolder then
+			pcall(function()
+				dstFolder = folder:Clone()
+				dstFolder.Parent = dstAnimate
+			end)
+		else
+			copyAnimIds(folder, dstFolder)
+		end
+	end
+
+	-- Nudge Animate to pick up new pack ids.
+	local humanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		pcall(function()
+			local animator = humanoid:FindFirstChildOfClass("Animator")
+			if animator then
+				for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+					track:Stop(0)
+				end
+			end
+			for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+				track:Stop(0)
+			end
+		end)
+	end
+
+	return true
+end
+
+_G.F.morphCharacterFromDescription = function(character, description)
+	if not character or description == nil then
+		return false, "Character/description missing."
+	end
+
+	local Players = game:GetService("Players")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return false, "Humanoid missing."
+	end
+
+	local okModel, template = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(description, humanoid.RigType)
+	end)
+	if not okModel or template == nil then
+		return false, "Could not build avatar template."
+	end
+
+	-- Keep template out of Workspace physics.
+	pcall(function()
+		template.Name = "LLSPLOIT_AvatarTemplate"
+		template.Parent = nil
+	end)
+
+	local ok, err = pcall(function()
+		_G.F.clearCharacterCosmetics(character)
+		_G.F.applyHumanoidScalesFromDescription(humanoid, description)
+
+		for _, child in ipairs(template:GetChildren()) do
+			if child:IsA("Accessory") then
+				_G.F.attachAccessoryToCharacter(humanoid, character, child)
+			elseif child:IsA("Shirt")
+				or child:IsA("Pants")
+				or child:IsA("ShirtGraphic")
+				or child:IsA("BodyColors")
+				or child:IsA("CharacterMesh") then
+				pcall(function()
+					child:Clone().Parent = character
+				end)
+			end
+		end
+
+		_G.F.copyHeadFaceFromModel(template, character)
+		_G.F.syncAnimateFromModel(template, character)
+	end)
+
+	pcall(function()
+		template:Destroy()
+	end)
+
+	if not ok then
+		return false, tostring(err)
+	end
+
+	return true
+end
+
 _G.F.clearLocalOnlyAvatar = function()
 	local state = _G.localAvatarState
 	if type(state) ~= "table" then
@@ -1604,17 +1879,13 @@ _G.F.clearLocalOnlyAvatar = function()
 
 	local player = game:GetService("Players").LocalPlayer
 	local character = player and player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or state.originalDescription == nil then
+	if not character or state.originalDescription == nil then
 		return
 	end
 
+	-- Restore without ApplyDescription (server-only).
 	pcall(function()
-		if humanoid.ApplyDescriptionReset then
-			humanoid:ApplyDescriptionReset(state.originalDescription)
-		else
-			humanoid:ApplyDescription(state.originalDescription)
-		end
+		_G.F.morphCharacterFromDescription(character, state.originalDescription)
 	end)
 end
 
@@ -1661,21 +1932,9 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			error("Could not load avatar description for " .. tostring(userId), 0)
 		end
 
-		-- ApplyDescriptionReset clears current accessories/clothing/anims then applies the target.
-		local applied = false
-		if humanoid.ApplyDescriptionReset then
-			local okApply = pcall(function()
-				humanoid:ApplyDescriptionReset(description)
-			end)
-			applied = okApply
-		end
-		if not applied then
-			local okApply, applyErr = pcall(function()
-				humanoid:ApplyDescription(description)
-			end)
-			if not okApply then
-				error(applyErr or "ApplyDescription failed", 0)
-			end
+		local morphOk, morphErr = _G.F.morphCharacterFromDescription(character, description)
+		if not morphOk then
+			error(morphErr or "Morph failed", 0)
 		end
 
 		state.appliedUserId = userId
@@ -1710,7 +1969,6 @@ _G.F.startLocalOnlyAvatar = function(userId)
 	end
 
 	state.characterConn = player.CharacterAdded:Connect(function()
-		-- New character = new body; capture a fresh original next apply.
 		state.originalDescription = nil
 		state.appliedUserId = nil
 		task.wait(0.5)
