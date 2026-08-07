@@ -209,118 +209,21 @@ _G.F.jackPerformOutdoorHeal = function()
 	end
 
 	local originalChunkId = currentChunk.id
-	local restoreWalkEnabled = nil
+	local restoreWalkEnabled = true
 	local utilities = _G.F.safeTableGet(_G._p, "Utilities")
+	local didDisableControls = false
 
-	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
-	if type(masterControl) == "table" then
-		restoreWalkEnabled = masterControl.WalkEnabled
-		masterControl.WalkEnabled = false
-	end
-
-	local menu = _G.F.safeTableGet(_G._p, "Menu")
-	if type(menu) == "table" then
-		pcall(function()
-			if type(menu.disable) == "function" then
-				menu:disable()
-			end
-			if type(menu.fastClose) == "function" then
-				menu:fastClose(3)
-			end
-		end)
-	end
-
-	if type(utilities) == "table" and type(utilities.FadeOut) == "function" then
-		pcall(function()
-			utilities:FadeOut(1)
-		end)
-	end
-
-	task.spawn(_G.F.jackAnnounceAutoHeal)
-
-	if type(utilities) == "table" and type(utilities.TeleportToSpawnBox) == "function" then
-		pcall(function()
-			utilities:TeleportToSpawnBox()
-		end)
-	end
-
-	if type(currentChunk.unbindIndoorCam) == "function" then
-		pcall(function()
-			currentChunk:unbindIndoorCam()
-		end)
-	end
-	if type(currentChunk.destroy) == "function" then
-		pcall(function()
-			currentChunk:destroy()
-		end)
-	end
-
-	-- MrJack settle before loading the blackout / Health Center chunk.
-	task.wait(2)
-
-	local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
-	if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
-		local okLoad, loaded = pcall(function()
-			return dataManager:loadChunk(blackOutTo)
-		end)
-		if okLoad and type(loaded) == "table" then
-			currentChunk = loaded
-		else
-			currentChunk = dataManager.currentChunk
-		end
-	end
-
-	if type(currentChunk) ~= "table" then
-		return false
-	end
-
-	local door = type(currentChunk.getDoor) == "function" and currentChunk:getDoor("HealthCenter") or nil
-	local room = type(currentChunk.getRoom) == "function" and currentChunk:getRoom("HealthCenter", door, 1) or nil
-
-	task.wait()
-	local okHealer, healerId = _G.F.networkGet("getHealer", "HealthCenter")
-	if not okHealer or not healerId then
-		task.wait()
-		okHealer, healerId = _G.F.networkGet("getHealer", "HealthCenter")
-	end
-
-	if okHealer and healerId then
-		_G.F.networkGet("heal", "HealthCenter", healerId)
-	else
-		_G.F.networkGet("heal", nil, "HealMachine1")
-	end
-
-	if type(room) == "table" and type(room.Destroy) == "function" then
-		pcall(function()
-			room:Destroy()
-		end)
-	end
-
-	if originalChunkId then
-		if type(currentChunk.destroy) == "function" then
-			pcall(function()
-				currentChunk:destroy()
-			end)
-		end
-
-		dataManager = _G.F.safeTableGet(_G._p, "DataManager")
-		if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
-			pcall(function()
-				dataManager:loadChunk(originalChunkId)
-			end)
-		end
-
-		if savedCFrame and type(utilities) == "table" and type(utilities.Teleport) == "function" then
-			pcall(function()
-				utilities:Teleport(savedCFrame)
-			end)
-		end
-
-		menu = _G.F.safeTableGet(_G._p, "Menu")
+	local function restoreAfterHeal()
+		local menu = _G.F.safeTableGet(_G._p, "Menu")
 		if type(menu) == "table" and type(menu.enable) == "function" then
 			pcall(function()
 				menu:enable()
 			end)
+		end
+
+		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
+		if type(masterControl) == "table" then
+			masterControl.WalkEnabled = restoreWalkEnabled ~= false
 		end
 
 		local chat = _G.F.safeTableGet(_G._p, "NPCChat")
@@ -335,11 +238,124 @@ _G.F.jackPerformOutdoorHeal = function()
 				utilities:FadeIn(1)
 			end)
 		end
+	end
 
-		masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
+	local ok, err = pcall(function()
+		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 		if type(masterControl) == "table" then
-			masterControl.WalkEnabled = restoreWalkEnabled ~= false
+			restoreWalkEnabled = masterControl.WalkEnabled
+			masterControl.WalkEnabled = false
+			didDisableControls = true
 		end
+
+		local menu = _G.F.safeTableGet(_G._p, "Menu")
+		if type(menu) == "table" then
+			pcall(function()
+				if type(menu.disable) == "function" then
+					menu:disable()
+				end
+				if type(menu.fastClose) == "function" then
+					menu:fastClose(3)
+				end
+			end)
+			didDisableControls = true
+		end
+
+		if type(utilities) == "table" and type(utilities.FadeOut) == "function" then
+			pcall(function()
+				utilities:FadeOut(1)
+			end)
+		end
+
+		task.spawn(_G.F.jackAnnounceAutoHeal)
+
+		if type(utilities) == "table" and type(utilities.TeleportToSpawnBox) == "function" then
+			pcall(function()
+				utilities:TeleportToSpawnBox()
+			end)
+		end
+
+		if type(currentChunk.unbindIndoorCam) == "function" then
+			pcall(function()
+				currentChunk:unbindIndoorCam()
+			end)
+		end
+		if type(currentChunk.destroy) == "function" then
+			pcall(function()
+				currentChunk:destroy()
+			end)
+		end
+
+		-- MrJack settle before loading the blackout / Health Center chunk.
+		task.wait(2)
+
+		local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+		if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
+			local okLoad, loaded = pcall(function()
+				return dataManager:loadChunk(blackOutTo)
+			end)
+			if okLoad and type(loaded) == "table" then
+				currentChunk = loaded
+			else
+				currentChunk = dataManager.currentChunk
+			end
+		end
+
+		if type(currentChunk) ~= "table" then
+			error("Heal chunk failed to load.", 0)
+		end
+
+		local door = type(currentChunk.getDoor) == "function" and currentChunk:getDoor("HealthCenter") or nil
+		local room = type(currentChunk.getRoom) == "function" and currentChunk:getRoom("HealthCenter", door, 1) or nil
+
+		task.wait()
+		local okHealer, healerId = _G.F.networkGet("getHealer", "HealthCenter")
+		if not okHealer or not healerId then
+			task.wait()
+			okHealer, healerId = _G.F.networkGet("getHealer", "HealthCenter")
+		end
+
+		if okHealer and healerId then
+			_G.F.networkGet("heal", "HealthCenter", healerId)
+		else
+			_G.F.networkGet("heal", nil, "HealMachine1")
+		end
+
+		if type(room) == "table" and type(room.Destroy) == "function" then
+			pcall(function()
+				room:Destroy()
+			end)
+		end
+
+		if originalChunkId then
+			if type(currentChunk.destroy) == "function" then
+				pcall(function()
+					currentChunk:destroy()
+				end)
+			end
+
+			dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+			if type(dataManager) == "table" and type(dataManager.loadChunk) == "function" then
+				pcall(function()
+					dataManager:loadChunk(originalChunkId)
+				end)
+			end
+
+			if savedCFrame and type(utilities) == "table" and type(utilities.Teleport) == "function" then
+				pcall(function()
+					utilities:Teleport(savedCFrame)
+				end)
+			end
+		end
+	end)
+
+	-- Always restore Menu / walk / fade, even on early failure. Leaving Menu
+	-- disabled makes Auto Trainer stall and Menu.Shop crash on boolean shop data.
+	restoreAfterHeal()
+
+	if not ok then
+		warn("[Auto Heal] " .. tostring(err))
+		return false
 	end
 
 	return true
@@ -1762,8 +1778,14 @@ _G.F.jackIgnoreNpcGetBit = function(...)
 	local target = packed[1]
 	local trainerId = packed[2]
 
-	if target == defeatedTrainers and trainerId ~= nil then
-		if _G.ignoreNpcBattleEnabled and table.find(session, trainerId) then
+	-- Only intercept real defeated-trainer bit reads. Never rewrite other BitBuffer
+	-- consumers (Shop / inventory decode), which must keep their original bits.
+	if _G.ignoreNpcBattleEnabled
+		and defeatedTrainers ~= nil
+		and type(defeatedTrainers) == "table"
+		and target == defeatedTrainers
+		and trainerId ~= nil then
+		if table.find(session, trainerId) then
 			return true
 		end
 
@@ -1771,6 +1793,11 @@ _G.F.jackIgnoreNpcGetBit = function(...)
 			table.insert(session, trainerId)
 		end
 
+		_G.F.jackEnterGameContext()
+	elseif target == defeatedTrainers and trainerId ~= nil and defeatedTrainers ~= nil then
+		if not table.find(session, trainerId) then
+			table.insert(session, trainerId)
+		end
 		_G.F.jackEnterGameContext()
 	end
 
