@@ -400,12 +400,14 @@ end
 
 _G.jackMoveBusy = _G.jackMoveBusy or false
 _G.jackMoveBusyToken = _G.jackMoveBusyToken or 0
+_G.jackMoveInputConsumed = _G.jackMoveInputConsumed or false
+_G.jackMoveInputBattle = _G.jackMoveInputBattle or nil
 
 _G.F.jackMarkMoveBusy = function(duration)
 	_G.jackMoveBusy = true
 	_G.jackMoveBusyToken = (_G.jackMoveBusyToken or 0) + 1
 	local token = _G.jackMoveBusyToken
-	task.delay(tonumber(duration) or 0.35, function()
+	task.delay(tonumber(duration) or 0.75, function()
 		if _G.jackMoveBusyToken == token then
 			_G.jackMoveBusy = false
 		end
@@ -802,6 +804,33 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 
 	local battle = _G.F.jackGetBattle()
 	if type(battle) ~= "table" then
+		_G.jackMoveInputConsumed = false
+		_G.jackMoveInputBattle = nil
+		return false
+	end
+
+	-- New battle / left input → allow one fresh submit next time we enter input.
+	if _G.jackMoveInputBattle ~= battle then
+		_G.jackMoveInputBattle = battle
+		_G.jackMoveInputConsumed = false
+	end
+	if battle.state ~= "input" then
+		_G.jackMoveInputConsumed = false
+		local battleGui = _G.F.getBattleGuiModule()
+		if type(battleGui) == "table"
+			and _G.F.isBattleMainMenuOpen()
+			and type(battleGui.mainButtonClicked) == "function" then
+			pcall(function()
+				battleGui:mainButtonClicked(1)
+			end)
+			_G.F.jackMarkMoveBusy(0.2)
+		end
+		return false
+	end
+
+	-- Already submitted a choice for this input phase. Submitting again while
+	-- State/LastState are both "input" freezes BattleClient (fulfillRequest).
+	if _G.jackMoveInputConsumed then
 		return false
 	end
 
@@ -810,8 +839,12 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 		return false
 	end
 
-	if battle.state ~= "input" then
-		if _G.F.isBattleMainMenuOpen() and type(battleGui.mainButtonClicked) == "function" then
+	local moves = battleGui.moves
+	local moveData = type(moves) == "table" and moves[moveSlot] or nil
+	if type(moveData) ~= "table" then
+		-- Fight panel may not be open yet; open it once, then wait for next tick.
+		if type(battleGui.mainButtonClicked) == "function" then
+			_G.F.jackMarkMoveBusy(0.25)
 			pcall(function()
 				battleGui:mainButtonClicked(1)
 			end)
@@ -819,14 +852,9 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 		return false
 	end
 
-	local moves = battleGui.moves
-	local moveData = type(moves) == "table" and moves[moveSlot] or nil
-	if type(moveData) ~= "table" then
-		return false
-	end
-
 	if type(battleGui.onMoveClicked) ~= "function" then
 		if type(battleGui.mainButtonClicked) == "function" then
+			_G.F.jackMarkMoveBusy(0.25)
 			pcall(function()
 				battleGui:mainButtonClicked(1)
 			end)
@@ -840,11 +868,14 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 			and type(activeMonster.energy) == "number"
 			and activeMonster.energy < moveData.energy
 			and not activeMonster.bypassEnergy then
+			_G.jackMoveInputConsumed = true
+			_G.F.jackMarkMoveBusy(0.85)
 			if type(battleGui.fightSelectionGroup) == "table" and type(battleGui.fightSelectionGroup.LoseFocus) == "function" then
 				pcall(function()
 					battleGui.fightSelectionGroup:LoseFocus()
 				end)
 			end
+			_G.F.jackEnterGameContext()
 			if type(battleGui.inputEvent) == "table" and type(battleGui.inputEvent.fire) == "function" then
 				pcall(function()
 					battleGui.inputEvent:fire("rest 0")
@@ -855,21 +886,28 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 					battleGui:exitButtonsMoveChosen()
 				end)
 			end
-			_G.F.jackMarkMoveBusy(0.35)
 			return true
 		end
 	end
 
-	if not moveData.disabled then
-		_G.F.jackEnterGameContext()
-		pcall(function()
-			battleGui:onMoveClicked(moveSlot)
-		end)
-		_G.F.jackMarkMoveBusy(0.35)
-		return true
+	if moveData.disabled then
+		return false
 	end
 
-	return false
+	-- Latch BEFORE the click so overlapping 0.1s ticks cannot double-submit.
+	_G.jackMoveInputConsumed = true
+	_G.F.jackMarkMoveBusy(0.85)
+	_G.F.jackEnterGameContext()
+	local ok = pcall(function()
+		battleGui:onMoveClicked(moveSlot)
+	end)
+	if not ok then
+		_G.jackMoveInputConsumed = false
+		_G.jackMoveBusy = false
+		return false
+	end
+
+	return true
 end
 
 _G.F.jackRunAutoMoveTick = function(allowWild)
