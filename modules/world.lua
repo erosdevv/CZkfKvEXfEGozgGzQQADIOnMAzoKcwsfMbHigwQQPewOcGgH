@@ -1685,6 +1685,49 @@ _G.F.loadAvatarAssetContainer = function(assetId)
 	end
 
 	local container = nil
+
+	-- Prefer executor GetObjects — InsertService is often blocked for catalog hats.
+	local function tryGetObjects()
+		local getters = {}
+		if type(game.GetObjects) == "function" then
+			table.insert(getters, function(url)
+				return game:GetObjects(url)
+			end)
+		end
+		if type(getobjects) == "function" then
+			table.insert(getters, getobjects)
+		end
+		if type(getgenv) == "function" then
+			local env = getgenv()
+			if type(env) == "table" and type(env.getobjects) == "function" then
+				table.insert(getters, env.getobjects)
+			end
+		end
+
+		for _, getter in ipairs(getters) do
+			local ok, objects = pcall(getter, "rbxassetid://" .. tostring(assetId))
+			if ok and type(objects) == "table" and objects[1] then
+				if #objects == 1 then
+					return objects[1]
+				end
+				local model = Instance.new("Model")
+				model.Name = "LLSPLOIT_Asset_" .. tostring(assetId)
+				for _, object in ipairs(objects) do
+					pcall(function()
+						object.Parent = model
+					end)
+				end
+				return model
+			end
+		end
+		return nil
+	end
+
+	container = tryGetObjects()
+	if container then
+		return container
+	end
+
 	pcall(function()
 		container = game:GetService("InsertService"):LoadAsset(assetId)
 	end)
@@ -1693,20 +1736,9 @@ _G.F.loadAvatarAssetContainer = function(assetId)
 	end
 
 	pcall(function()
-		local getObjects = game.GetObjects
-		if type(getObjects) == "function" then
-			local objects = getObjects(game, "rbxassetid://" .. tostring(assetId))
-			if type(objects) == "table" and objects[1] then
-				if #objects == 1 then
-					container = objects[1]
-				else
-					container = Instance.new("Model")
-					container.Name = "LLSPLOIT_Asset_" .. tostring(assetId)
-					for _, object in ipairs(objects) do
-						object.Parent = container
-					end
-				end
-			end
+		local AssetService = game:GetService("AssetService")
+		if AssetService and AssetService.LoadAssetAsync then
+			container = AssetService:LoadAssetAsync(assetId)
 		end
 	end)
 
@@ -1777,7 +1809,58 @@ _G.F.parseAccessoryIdList = function(value)
 	return ids
 end
 
-_G.F.collectDescriptionAccessoryIds = function(description)
+_G.F.fetchCurrentlyWearingAssetIds = function(userId)
+	local ids = {}
+	userId = tonumber(userId)
+	if not userId or userId <= 0 then
+		return ids
+	end
+
+	local urls = {
+		"https://avatar.roblox.com/v1/users/" .. tostring(userId) .. "/currently-wearing",
+		"https://avatar.roproxy.com/v1/users/" .. tostring(userId) .. "/currently-wearing",
+	}
+
+	for _, url in ipairs(urls) do
+		local ok, body = pcall(function()
+			return game:HttpGet(url)
+		end)
+		if ok and type(body) == "string" and body ~= "" then
+			-- Prefer HttpService JSON when available.
+			local decoded = nil
+			pcall(function()
+				decoded = game:GetService("HttpService"):JSONDecode(body)
+			end)
+			if type(decoded) == "table" and type(decoded.assetIds) == "table" then
+				for _, id in ipairs(decoded.assetIds) do
+					id = tonumber(id)
+					if id and id > 0 then
+						table.insert(ids, id)
+					end
+				end
+				if #ids > 0 then
+					return ids
+				end
+			end
+
+			-- Regex fallback if JSONDecode is blocked.
+			for idText in string.gmatch(body, "(%d+)") do
+				local id = tonumber(idText)
+				-- Avatar asset ids are large; skip tiny noise like "1" from JSON keys if needed.
+				if id and id >= 1000 then
+					table.insert(ids, id)
+				end
+			end
+			if #ids > 0 then
+				return ids
+			end
+		end
+	end
+
+	return ids
+end
+
+_G.F.collectDescriptionAccessoryIds = function(description, userId)
 	local ids = {}
 	local seen = {}
 
@@ -1794,7 +1877,11 @@ _G.F.collectDescriptionAccessoryIds = function(description)
 		if type(accessories) == "table" then
 			for _, entry in ipairs(accessories) do
 				if type(entry) == "table" then
-					add(entry.AssetId or entry.assetId)
+					add(entry.AssetId or entry.assetId or entry.Id or entry.id)
+				elseif typeof(entry) == "Instance" then
+					pcall(function()
+						add(entry.AssetId)
+					end)
 				end
 			end
 		end
@@ -1820,28 +1907,142 @@ _G.F.collectDescriptionAccessoryIds = function(description)
 		end
 	end
 
+	-- Extra source when description accessory fields are empty / incomplete.
+	for _, id in ipairs(_G.F.fetchCurrentlyWearingAssetIds(userId)) do
+		add(id)
+	end
+
 	return ids
+end
+
+_G.F.findCharacterAttachmentByName = function(character, attachmentName)
+	if not character or type(attachmentName) ~= "string" or attachmentName == "" then
+		return nil
+	end
+
+	local function search(parent)
+		for _, child in ipairs(parent:GetChildren()) do
+			if child:IsA("Attachment") and child.Name == attachmentName then
+				return child
+			end
+			-- Don't recurse into other accessories/tools.
+			if not child:IsA("Accoutrement") and not child:IsA("Tool") then
+				local found = search(child)
+				if found then
+					return found
+				end
+			end
+		end
+		return nil
+	end
+
+	return search(character)
+end
+
+-- Client-safe AddAccessory: welds Handle to the matching character Attachment.
+_G.F.weldAccessoryToCharacter = function(character, accessory)
+	if not character or not accessory then
+		return false
+	end
+
+	pcall(function()
+		accessory.Parent = character
+	end)
+
+	local handle = accessory:FindFirstChild("Handle")
+	if not handle or not handle:IsA("BasePart") then
+		-- Some modern accessories use a different root part name.
+		handle = accessory:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if not handle then
+		return false
+	end
+
+	pcall(function()
+		handle.CanCollide = false
+		handle.Massless = true
+		handle.Anchored = false
+	end)
+
+	-- Remove stale welds that can block a fresh client weld.
+	for _, child in ipairs(handle:GetChildren()) do
+		if child:IsA("Weld") or child:IsA("WeldConstraint") or child:IsA("Motor6D") then
+			if child.Name == "AccessoryWeld" or child.Name == "AccessoryWeldConstraint" then
+				pcall(function()
+					child:Destroy()
+				end)
+			end
+		end
+	end
+
+	local accessoryAttachment = handle:FindFirstChildOfClass("Attachment")
+	if not accessoryAttachment then
+		for _, descendant in ipairs(handle:GetChildren()) do
+			if descendant:IsA("Attachment") then
+				accessoryAttachment = descendant
+				break
+			end
+		end
+	end
+
+	local welded = false
+	if accessoryAttachment then
+		local characterAttachment = _G.F.findCharacterAttachmentByName(character, accessoryAttachment.Name)
+		if characterAttachment and characterAttachment.Parent and characterAttachment.Parent:IsA("BasePart") then
+			local ok = pcall(function()
+				local weld = Instance.new("Weld")
+				weld.Name = "AccessoryWeld"
+				weld.Part0 = characterAttachment.Parent
+				weld.Part1 = handle
+				weld.C0 = characterAttachment.CFrame
+				weld.C1 = accessoryAttachment.CFrame
+				weld.Parent = handle
+			end)
+			welded = ok
+		end
+	end
+
+	if not welded then
+		local head = character:FindFirstChild("Head")
+		if head and head:IsA("BasePart") then
+			pcall(function()
+				local weld = Instance.new("Weld")
+				weld.Name = "AccessoryWeld"
+				weld.Part0 = head
+				weld.Part1 = handle
+				weld.C0 = CFrame.new(0, 0.5, 0)
+				weld.C1 = (accessory.AttachmentPoint or CFrame.new())
+				weld.Parent = handle
+			end)
+			welded = true
+		end
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		pcall(function()
+			humanoid:BuildRigFromAttachments()
+		end)
+	end
+
+	return welded
 end
 
 _G.F.attachLoadedInstanceToCharacter = function(humanoid, character, instance)
 	if not instance or not character then
-		return
+		return 0
 	end
 
+	local attached = 0
+
 	local function attachOne(item)
-		if item:IsA("Accessory") then
+		if item:IsA("Accessory") or item:IsA("Accoutrement") then
 			local clone = item:Clone()
-			local added = false
-			if humanoid then
-				local ok = pcall(function()
-					humanoid:AddAccessory(clone)
-				end)
-				added = ok and clone.Parent ~= nil
-			end
-			if not added then
-				pcall(function()
-					clone.Parent = character
-				end)
+			-- Always manual-weld on client; AddAccessory does not create welds locally.
+			if _G.F.weldAccessoryToCharacter(character, clone) then
+				attached = attached + 1
+			elseif clone.Parent == character then
+				attached = attached + 1
 			end
 			for _, part in ipairs(clone:GetDescendants()) do
 				if part:IsA("BasePart") then
@@ -1877,6 +2078,47 @@ _G.F.attachLoadedInstanceToCharacter = function(humanoid, character, instance)
 	end
 
 	attachOne(instance)
+	return attached
+end
+
+_G.F.applyAccessoriesFromDescription = function(character, description, userId)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not character or not humanoid then
+		return 0
+	end
+
+	local attached = 0
+	local ids = _G.F.collectDescriptionAccessoryIds(description, userId)
+
+	-- Filter out non-accessory wearables we already handle elsewhere.
+	local skip = {}
+	pcall(function()
+		skip[tonumber(description.Shirt) or 0] = true
+		skip[tonumber(description.Pants) or 0] = true
+		skip[tonumber(description.GraphicTShirt) or 0] = true
+		skip[tonumber(description.Face) or 0] = true
+		skip[tonumber(description.IdleAnimation) or 0] = true
+		skip[tonumber(description.WalkAnimation) or 0] = true
+		skip[tonumber(description.RunAnimation) or 0] = true
+		skip[tonumber(description.JumpAnimation) or 0] = true
+		skip[tonumber(description.FallAnimation) or 0] = true
+		skip[tonumber(description.ClimbAnimation) or 0] = true
+		skip[tonumber(description.SwimAnimation) or 0] = true
+	end)
+
+	for _, assetId in ipairs(ids) do
+		if not skip[assetId] then
+			local container = _G.F.loadAvatarAssetContainer(assetId)
+			if container then
+				attached = attached + (_G.F.attachLoadedInstanceToCharacter(humanoid, character, container) or 0)
+				pcall(function()
+					container:Destroy()
+				end)
+			end
+		end
+	end
+
+	return attached
 end
 
 _G.F.applyClothingFromDescription = function(character, description)
@@ -2070,7 +2312,7 @@ _G.F.applyAnimatePacksFromDescription = function(character, description)
 	end
 end
 
-_G.F.morphCharacterFromDescription = function(character, description)
+_G.F.morphCharacterFromDescription = function(character, description, userId)
 	if not character or description == nil then
 		return false, "Character/description missing."
 	end
@@ -2087,17 +2329,7 @@ _G.F.morphCharacterFromDescription = function(character, description)
 		_G.F.applyBodyColorsFromDescription(character, description)
 		_G.F.applyClothingFromDescription(character, description)
 		_G.F.applyFaceFromDescription(character, description)
-
-		for _, assetId in ipairs(_G.F.collectDescriptionAccessoryIds(description)) do
-			local container = _G.F.loadAvatarAssetContainer(assetId)
-			if container then
-				_G.F.attachLoadedInstanceToCharacter(humanoid, character, container)
-				pcall(function()
-					container:Destroy()
-				end)
-			end
-		end
-
+		_G.F.applyAccessoriesFromDescription(character, description, userId)
 		_G.F.applyAnimatePacksFromDescription(character, description)
 	end)
 
@@ -2170,7 +2402,7 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			error("Could not load avatar description for " .. tostring(userId), 0)
 		end
 
-		local morphOk, morphErr = _G.F.morphCharacterFromDescription(character, description)
+		local morphOk, morphErr = _G.F.morphCharacterFromDescription(character, description, userId)
 		if not morphOk then
 			error(morphErr or "Morph failed", 0)
 		end
