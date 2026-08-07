@@ -1,9 +1,10 @@
 -- main.lua
 -- Entry point for LLSPLOIT.
 -- Paste this entire file into your executor, or loadstring it from the raw GitHub URL:
---   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua"))()
+--   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua?v=" .. tostring(tick())))()
 
 local BRANCH = "main"
+local SCRIPT_VERSION = "avatar-asset-morph-1"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 
@@ -51,7 +52,7 @@ end
 -- back-to-back with no yields so task.defer/spawn cannot race unfinished modules.
 local function downloadModule(name)
 	-- Cache-bust raw CDN so module updates are visible immediately.
-	local url = REPO .. "/modules/" .. name .. ".lua?v=" .. tostring(os.clock())
+	local url = REPO .. "/modules/" .. name .. ".lua?v=" .. SCRIPT_VERSION .. "-" .. tostring(os.clock())
 	local src = game:HttpGet(url)
 	if type(src) ~= "string" or src == "" or src:sub(1, 3) == "404" then
 		error("[LLSPLOIT] Failed to download '" .. name .. "' from " .. url)
