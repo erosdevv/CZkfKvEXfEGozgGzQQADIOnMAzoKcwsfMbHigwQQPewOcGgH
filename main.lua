@@ -152,15 +152,15 @@ end)
 local orion = ENV.OrionLib or _G.OrionLib
 orion:Init()
 
--- Client-only cosmetic avatar (does not wait on game hooks).
+-- Apply UserId HumanoidDescription onto the local character (real avatar + packs).
 task.defer(function()
 	if type(_G.F) == "table" and type(_G.F.startLocalOnlyAvatar) == "function" and _G.localAvatarEnabled then
 		local ok, result = pcall(_G.F.startLocalOnlyAvatar, _G.localAvatarUserId)
 		if ok and result then
 			pcall(function()
 				orion:MakeNotification({
-					Name = "Local Avatar",
-					Content = "Client-only avatar ready (" .. tostring(_G.localAvatarUserId or result) .. ")",
+					Name = "Avatar Swap",
+					Content = "Applied avatar " .. tostring(_G.localAvatarUserId or result),
 					Time = 3
 				})
 			end)
