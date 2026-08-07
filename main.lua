@@ -152,6 +152,22 @@ end)
 local orion = ENV.OrionLib or _G.OrionLib
 orion:Init()
 
+-- Client-only cosmetic avatar (does not wait on game hooks).
+task.defer(function()
+	if type(_G.F) == "table" and type(_G.F.startLocalOnlyAvatar) == "function" and _G.localAvatarEnabled then
+		local ok, result = pcall(_G.F.startLocalOnlyAvatar, _G.localAvatarUserId)
+		if ok and result then
+			pcall(function()
+				orion:MakeNotification({
+					Name = "Local Avatar",
+					Content = "Client-only avatar ready (" .. tostring(_G.localAvatarUserId or result) .. ")",
+					Time = 3
+				})
+			end)
+		end
+	end
+end)
+
 task.defer(function()
 	for _ = 1, 30 do
 		if type(_G.F) == "table" and _G.F.ensureP() then

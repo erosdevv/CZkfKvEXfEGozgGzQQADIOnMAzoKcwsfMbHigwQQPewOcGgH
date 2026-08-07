@@ -1063,6 +1063,74 @@ if settingsGeneralSection then
 	end)
 end
 
+local settingsAvatarSection
+settingsBuild("Local Avatar section", function()
+	settingsAvatarSection = _G.SettingsTab:AddSection({ Name = "Local Avatar" })
+end)
+
+if settingsAvatarSection then
+	settingsBuild("Local Avatar toggle", function()
+		_G.configUi.localAvatarToggle = settingsAvatarSection:AddToggle({
+			Name = "Client Avatar Swap",
+			Default = _G.localAvatarEnabled,
+			Color = Color3.fromRGB(160, 200, 255),
+			Callback = function(value)
+				local ok, reason = _G.F.setLocalAvatarEnabled(value)
+				if value and ok then
+					pcall(function()
+						_G.OrionLib:MakeNotification({
+							Name = "Local Avatar",
+							Content = "Using client-only avatar " .. tostring(_G.localAvatarUserId or reason),
+							Time = 3
+						})
+					end)
+				elseif not ok and reason then
+					pcall(function()
+						_G.OrionLib:MakeNotification({
+							Name = "Local Avatar",
+							Content = tostring(reason),
+							Time = 4
+						})
+					end)
+				end
+			end
+		})
+	end)
+
+	settingsBuild("Local Avatar user id", function()
+		settingsAvatarSection:AddTextbox({
+			Name = "Avatar UserId (optional)",
+			Default = _G.localAvatarUserId and tostring(_G.localAvatarUserId) or "",
+			TextDisappear = false,
+			Callback = function(value)
+				local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+				local id = tonumber(text)
+				_G.localAvatarUserId = (id and id > 0) and id or nil
+				if _G.localAvatarEnabled and _G.localAvatarUserId then
+					pcall(_G.F.applyLocalOnlyAvatar, _G.localAvatarUserId)
+				end
+			end
+		})
+	end)
+
+	settingsBuild("Reroll Local Avatar", function()
+		settingsAvatarSection:AddButton({
+			Name = "Reroll Local Avatar",
+			Icon = "shuffle",
+			Callback = function()
+				local ok, result = _G.F.rerollLocalOnlyAvatar()
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = "Local Avatar",
+						Content = ok and ("Swapped to " .. tostring(result)) or tostring(result),
+						Time = 3
+					})
+				end)
+			end
+		})
+	end)
+end
+
 local settingsServerSection
 settingsBuild("Server section", function()
 	settingsServerSection = _G.SettingsTab:AddSection({ Name = "Server Hop" })

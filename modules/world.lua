@@ -1536,4 +1536,293 @@ _G.F.openDeveloperConsole = function()
 	return true
 end
 
+-- Client-only avatar cosmetic: hide the real character locally and overlay a
+-- fake HumanoidModel from another UserId. Created instances stay local in
+-- executor context; other players still see your real avatar.
+_G.localAvatarState = _G.localAvatarState or {
+	fake = nil,
+	followConn = nil,
+	hideConn = nil,
+	characterConn = nil,
+	ancestryConn = nil,
+}
+
+_G.LOCAL_AVATAR_USER_ID_POOL = {
+	1, -- Roblox
+	156, -- builderman
+	261, -- John Doe classic-era
+	5774246,
+	1560650,
+	338287387,
+	4810427201,
+	1553281596,
+	1890850136,
+	308165,
+	2295360,
+	24936,
+	20321238,
+	1231234,
+	27636987,
+}
+
+_G.F.pickLocalAvatarUserId = function(preferred)
+	local preferredId = tonumber(preferred)
+	if preferredId and preferredId > 0 then
+		return preferredId
+	end
+
+	local pool = _G.LOCAL_AVATAR_USER_ID_POOL
+	if type(pool) ~= "table" or #pool == 0 then
+		return 1
+	end
+
+	return pool[math.random(1, #pool)]
+end
+
+_G.F.clearLocalOnlyAvatar = function()
+	local state = _G.localAvatarState
+	if type(state) ~= "table" then
+		return
+	end
+
+	if state.followConn then
+		pcall(function()
+			state.followConn:Disconnect()
+		end)
+		state.followConn = nil
+	end
+	if state.hideConn then
+		pcall(function()
+			state.hideConn:Disconnect()
+		end)
+		state.hideConn = nil
+	end
+	if state.ancestryConn then
+		pcall(function()
+			state.ancestryConn:Disconnect()
+		end)
+		state.ancestryConn = nil
+	end
+	if state.fake then
+		pcall(function()
+			state.fake:Destroy()
+		end)
+		state.fake = nil
+	end
+
+	local player = game:GetService("Players").LocalPlayer
+	local character = player and player.Character
+	if character then
+		_G.F.setCharacterLocalHidden(character, false)
+	end
+end
+
+_G.F.setCharacterLocalHidden = function(character, hidden)
+	if typeof(character) ~= "Instance" and type(character) ~= "userdata" then
+		return
+	end
+
+	local modifier = hidden and 1 or 0
+	for _, descendant in ipairs(character:GetDescendants()) do
+		pcall(function()
+			if descendant:IsA("BasePart") or descendant:IsA("Decal") or descendant:IsA("Texture") then
+				descendant.LocalTransparencyModifier = modifier
+			elseif descendant:IsA("ParticleEmitter")
+				or descendant:IsA("Trail")
+				or descendant:IsA("Beam")
+				or descendant:IsA("Fire")
+				or descendant:IsA("Smoke")
+				or descendant:IsA("Sparkles") then
+				descendant.Enabled = not hidden
+			elseif descendant:IsA("LayerCollector") then
+				descendant.Enabled = not hidden
+			end
+		end)
+	end
+end
+
+_G.F.applyLocalOnlyAvatar = function(userId)
+	if not _G.localAvatarEnabled then
+		_G.F.clearLocalOnlyAvatar()
+		return false, "Local avatar is disabled."
+	end
+
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local player = Players.LocalPlayer
+	if not player then
+		return false, "LocalPlayer missing."
+	end
+
+	local character = player.Character
+	if not character then
+		return false, "Character not ready."
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root then
+		return false, "Humanoid/root not ready."
+	end
+
+	userId = _G.F.pickLocalAvatarUserId(userId or _G.localAvatarUserId)
+	_G.localAvatarUserId = userId
+
+	local okDesc, description = pcall(function()
+		return Players:GetHumanoidDescriptionFromUserId(userId)
+	end)
+	if not okDesc or typeof(description) ~= "Instance" then
+		return false, "Could not load avatar description for " .. tostring(userId)
+	end
+
+	local okModel, fake = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(description, humanoid.RigType)
+	end)
+	if not okModel or typeof(fake) ~= "Instance" then
+		return false, "Could not build local avatar model."
+	end
+
+	_G.F.clearLocalOnlyAvatar()
+
+	for _, descendant in ipairs(fake:GetDescendants()) do
+		if descendant:IsA("Script") or descendant:IsA("LocalScript") then
+			pcall(function()
+				descendant:Destroy()
+			end)
+		elseif descendant:IsA("BasePart") then
+			pcall(function()
+				descendant.CanCollide = false
+				descendant.CanTouch = false
+				descendant.CanQuery = false
+				descendant.Massless = true
+				descendant.Anchored = false
+			end)
+		end
+	end
+
+	local fakeHumanoid = fake:FindFirstChildOfClass("Humanoid")
+	if fakeHumanoid then
+		pcall(function()
+			fakeHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			fakeHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+			fakeHumanoid.AutoRotate = false
+			fakeHumanoid.WalkSpeed = 0
+			fakeHumanoid.JumpPower = 0
+			fakeHumanoid.JumpHeight = 0
+		end)
+	end
+
+	fake.Name = "LLSPLOIT_LocalAvatar"
+	local camera = workspace.CurrentCamera
+	fake.Parent = (camera and camera.Parent) and camera or workspace
+
+	_G.localAvatarState.fake = fake
+	_G.F.setCharacterLocalHidden(character, true)
+
+	_G.localAvatarState.hideConn = character.DescendantAdded:Connect(function(descendant)
+		if not _G.localAvatarEnabled or _G.localAvatarState.fake ~= fake then
+			return
+		end
+		pcall(function()
+			if descendant:IsA("BasePart") or descendant:IsA("Decal") or descendant:IsA("Texture") then
+				descendant.LocalTransparencyModifier = 1
+			elseif descendant:IsA("ParticleEmitter")
+				or descendant:IsA("Trail")
+				or descendant:IsA("Beam")
+				or descendant:IsA("Fire")
+				or descendant:IsA("Smoke")
+				or descendant:IsA("Sparkles") then
+				descendant.Enabled = false
+			end
+		end)
+	end)
+
+	_G.localAvatarState.followConn = RunService.RenderStepped:Connect(function()
+		if not _G.localAvatarEnabled then
+			return
+		end
+		if not character.Parent or not fake.Parent then
+			return
+		end
+		local realRoot = character:FindFirstChild("HumanoidRootPart")
+		if not realRoot then
+			return
+		end
+		pcall(function()
+			fake:PivotTo(realRoot.CFrame)
+		end)
+		local realHum = character:FindFirstChildOfClass("Humanoid")
+		local fakeHum = fake:FindFirstChildOfClass("Humanoid")
+		if realHum and fakeHum then
+			pcall(function()
+				fakeHum.HipHeight = realHum.HipHeight
+			end)
+		end
+	end)
+
+	_G.localAvatarState.ancestryConn = character.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			_G.F.clearLocalOnlyAvatar()
+		end
+	end)
+
+	return true, userId
+end
+
+_G.F.startLocalOnlyAvatar = function(userId)
+	_G.localAvatarEnabled = true
+
+	local Players = game:GetService("Players")
+	local player = Players.LocalPlayer
+	if not player then
+		return false, "LocalPlayer missing."
+	end
+
+	local state = _G.localAvatarState
+	if state.characterConn then
+		pcall(function()
+			state.characterConn:Disconnect()
+		end)
+		state.characterConn = nil
+	end
+
+	state.characterConn = player.CharacterAdded:Connect(function()
+		task.wait(0.35)
+		if _G.localAvatarEnabled then
+			pcall(_G.F.applyLocalOnlyAvatar, _G.localAvatarUserId)
+		end
+	end)
+
+	if player.Character then
+		return _G.F.applyLocalOnlyAvatar(userId)
+	end
+
+	return true, "Waiting for character."
+end
+
+_G.F.stopLocalOnlyAvatar = function()
+	_G.localAvatarEnabled = false
+	local state = _G.localAvatarState
+	if type(state) == "table" and state.characterConn then
+		pcall(function()
+			state.characterConn:Disconnect()
+		end)
+		state.characterConn = nil
+	end
+	_G.F.clearLocalOnlyAvatar()
+	return true
+end
+
+_G.F.setLocalAvatarEnabled = function(value)
+	if value then
+		return _G.F.startLocalOnlyAvatar(_G.localAvatarUserId)
+	end
+	return _G.F.stopLocalOnlyAvatar()
+end
+
+_G.F.rerollLocalOnlyAvatar = function()
+	_G.localAvatarUserId = nil
+	return _G.F.startLocalOnlyAvatar(nil)
+end
+
 return { name = "world" }

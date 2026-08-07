@@ -400,14 +400,14 @@ end
 
 _G.jackMoveBusy = _G.jackMoveBusy or false
 _G.jackMoveBusyToken = _G.jackMoveBusyToken or 0
-_G.jackMoveInputConsumed = _G.jackMoveInputConsumed or false
-_G.jackMoveInputBattle = _G.jackMoveInputBattle or nil
+_G.jackLastMoveInputKey = _G.jackLastMoveInputKey or nil
+_G.jackLastMoveInputBattle = _G.jackLastMoveInputBattle or nil
 
 _G.F.jackMarkMoveBusy = function(duration)
 	_G.jackMoveBusy = true
 	_G.jackMoveBusyToken = (_G.jackMoveBusyToken or 0) + 1
 	local token = _G.jackMoveBusyToken
-	task.delay(tonumber(duration) or 0.75, function()
+	task.delay(tonumber(duration) or 0.55, function()
 		if _G.jackMoveBusyToken == token then
 			_G.jackMoveBusy = false
 		end
@@ -416,6 +416,34 @@ end
 
 _G.F.jackIsMoveBusy = function()
 	return _G.jackMoveBusy == true or _G.jackOutdoorHealRunning == true
+end
+
+-- Key that changes each new input turn. Fast Battle can skip the non-input
+-- window between our polls, so we must not rely on observing state ~= "input".
+_G.F.jackGetMoveInputKey = function(battle, battleGui)
+	if type(battle) ~= "table" then
+		return "none"
+	end
+
+	local hp, energy, foeHp = "?", "?", "?"
+	if type(battleGui) == "table" and type(battleGui.activeMonster) == "table" then
+		local mon = battleGui.activeMonster
+		hp = tostring(mon.hp or mon.HP or mon.currentHP or mon.health or "")
+		energy = tostring(mon.energy or "")
+	end
+
+	local foe = _G.F.jackGetBattleFoe(battle, battleGui)
+	if type(foe) == "table" then
+		foeHp = tostring(foe.hp or foe.HP or foe.currentHP or foe.health or "")
+	end
+
+	return table.concat({
+		tostring(battle.turn or battle.Turn or ""),
+		tostring(battle.request or battle.Request or ""),
+		hp,
+		energy,
+		foeHp,
+	}, "|")
 end
 
 _G.F.setDropdownUiValue = function(dropdown, value)
@@ -804,22 +832,23 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 
 	local battle = _G.F.jackGetBattle()
 	if type(battle) ~= "table" then
-		_G.jackMoveInputConsumed = false
-		_G.jackMoveInputBattle = nil
+		_G.jackLastMoveInputKey = nil
+		_G.jackLastMoveInputBattle = nil
 		return false
 	end
 
-	-- New battle / left input → allow one fresh submit next time we enter input.
-	if _G.jackMoveInputBattle ~= battle then
-		_G.jackMoveInputBattle = battle
-		_G.jackMoveInputConsumed = false
+	if _G.jackLastMoveInputBattle ~= battle then
+		_G.jackLastMoveInputBattle = battle
+		_G.jackLastMoveInputKey = nil
 	end
+
+	local battleGui = _G.F.getBattleGuiModule()
+	if type(battleGui) ~= "table" then
+		return false
+	end
+
 	if battle.state ~= "input" then
-		_G.jackMoveInputConsumed = false
-		local battleGui = _G.F.getBattleGuiModule()
-		if type(battleGui) == "table"
-			and _G.F.isBattleMainMenuOpen()
-			and type(battleGui.mainButtonClicked) == "function" then
+		if _G.F.isBattleMainMenuOpen() and type(battleGui.mainButtonClicked) == "function" then
 			pcall(function()
 				battleGui:mainButtonClicked(1)
 			end)
@@ -828,21 +857,16 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 		return false
 	end
 
-	-- Already submitted a choice for this input phase. Submitting again while
-	-- State/LastState are both "input" freezes BattleClient (fulfillRequest).
-	if _G.jackMoveInputConsumed then
-		return false
-	end
-
-	local battleGui = _G.F.getBattleGuiModule()
-	if type(battleGui) ~= "table" then
+	local inputKey = _G.F.jackGetMoveInputKey(battle, battleGui)
+	-- Same turn/request already handled — blocks double-submit freezes without
+	-- getting stuck when Fast Battle skips the non-input observation window.
+	if _G.jackLastMoveInputKey == inputKey then
 		return false
 	end
 
 	local moves = battleGui.moves
 	local moveData = type(moves) == "table" and moves[moveSlot] or nil
 	if type(moveData) ~= "table" then
-		-- Fight panel may not be open yet; open it once, then wait for next tick.
 		if type(battleGui.mainButtonClicked) == "function" then
 			_G.F.jackMarkMoveBusy(0.25)
 			pcall(function()
@@ -868,8 +892,8 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 			and type(activeMonster.energy) == "number"
 			and activeMonster.energy < moveData.energy
 			and not activeMonster.bypassEnergy then
-			_G.jackMoveInputConsumed = true
-			_G.F.jackMarkMoveBusy(0.85)
+			_G.jackLastMoveInputKey = inputKey
+			_G.F.jackMarkMoveBusy(0.55)
 			if type(battleGui.fightSelectionGroup) == "table" and type(battleGui.fightSelectionGroup.LoseFocus) == "function" then
 				pcall(function()
 					battleGui.fightSelectionGroup:LoseFocus()
@@ -894,15 +918,15 @@ _G.F.jackUseBattleGuiMove = function(moveSlot)
 		return false
 	end
 
-	-- Latch BEFORE the click so overlapping 0.1s ticks cannot double-submit.
-	_G.jackMoveInputConsumed = true
-	_G.F.jackMarkMoveBusy(0.85)
+	-- Latch key BEFORE the click so overlapping ticks cannot double-submit.
+	_G.jackLastMoveInputKey = inputKey
+	_G.F.jackMarkMoveBusy(0.55)
 	_G.F.jackEnterGameContext()
 	local ok = pcall(function()
 		battleGui:onMoveClicked(moveSlot)
 	end)
 	if not ok then
-		_G.jackMoveInputConsumed = false
+		_G.jackLastMoveInputKey = nil
 		_G.jackMoveBusy = false
 		return false
 	end
