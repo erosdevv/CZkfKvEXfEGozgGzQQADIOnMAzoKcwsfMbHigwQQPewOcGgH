@@ -472,19 +472,48 @@ _G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
 
 _G.BattleTab:AddSection({ Name = "Trainer Target" })
 
-_G.configUi.jackTrainerIdTextbox = _G.TrainersTab:AddTextbox({
-	Name = "Trainer ID",
-	Default = (_G.jackAutoBattle.Trainer ~= "Disabled" and tostring(_G.jackAutoBattle.Trainer)) or "",
-	TextDisappear = false,
-	Callback = function(value)
-		_G.F.jackSetAutoTrainer(value)
+do
+	-- Seed from whatever is already loaded so the first paint isn't empty.
+	pcall(function()
+		_G.F.jackRefreshTrainerTargetFromChunk(false)
+	end)
+
+	local initialOptions = _G.jackTrainerDropdownOptions or { "Disabled" }
+	local initialSelected = _G.F.jackFindTrainerOptionForId(_G.jackAutoBattle.Trainer) or "Disabled"
+
+	_G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
+		Name = "Battleable Trainer",
+		Default = initialSelected,
+		Options = initialOptions,
+		Callback = function(value)
+			if _G.jackSyncingDropdownUi then
+				return
+			end
+			_G.F.jackSetAutoTrainer(value)
+		end,
+	})
+
+	-- Legacy alias: older config sync looked for a textbox under this key.
+	_G.configUi.jackTrainerIdTextbox = _G.configUi.jackTrainerDropdown
+end
+
+_G.TrainersTab:AddButton({
+	Name = "Refresh Chunk Trainers",
+	Icon = "refresh-cw",
+	Callback = function()
+		local entries = _G.F.jackRefreshTrainerTargetFromChunk(true)
+		local count = type(entries) == "table" and #entries or 0
+		_G.OrionLib:MakeNotification({
+			Name = "Trainers",
+			Content = count > 0
+				and (tostring(count) .. " battleable trainer(s) in this chunk.")
+				or "No battleable trainers loaded in this chunk.",
+			Time = 4,
+		})
 	end,
 })
 
--- Keep legacy key so config sync / older hooks don't nil-index.
-_G.configUi.jackTrainerDropdown = _G.configUi.jackTrainerIdTextbox
-
-_G.TrainersTab:AddLabel("Type the trainer #Battle ID (number). Leave blank to disable.")
+_G.TrainersTab:AddLabel("Shows NPCs in this chunk with #Battle that exist in chunk.battles. Format: #ID Name.")
 
 
 _G.RallyTab:AddSection({ Name = "Rally" })
