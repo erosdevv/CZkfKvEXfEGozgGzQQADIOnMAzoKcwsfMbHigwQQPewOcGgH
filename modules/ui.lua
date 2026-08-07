@@ -482,7 +482,7 @@ do
 	local initialSelected = _G.F.jackFindTrainerOptionForId(_G.jackAutoBattle.Trainer) or "Disabled"
 
 	_G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
-		Name = "Battleable Trainer",
+		Name = "Chunk Trainer",
 		Default = initialSelected,
 		Options = initialOptions,
 		Callback = function(value)
@@ -506,14 +506,14 @@ _G.TrainersTab:AddButton({
 		_G.OrionLib:MakeNotification({
 			Name = "Trainers",
 			Content = count > 0
-				and (tostring(count) .. " battleable trainer(s) in this chunk.")
-				or "No battleable trainers loaded in this chunk.",
+				and (tostring(count) .. " trainer(s) in this chunk.")
+				or "No trainers found in this chunk.",
 			Time = 4,
 		})
 	end,
 })
 
-_G.TrainersTab:AddLabel("Shows NPCs in this chunk with #Battle that exist in chunk.battles. Format: #ID Name.")
+_G.TrainersTab:AddLabel("Lists trainers from the loaded chunk.battles table. Live NPC is resolved when starting.")
 
 
 _G.RallyTab:AddSection({ Name = "Rally" })
@@ -1714,7 +1714,7 @@ task.spawn(function()
 			and _G.jackAutoBattle.Trainer
 			and _G.jackAutoBattle.Trainer ~= "Disabled"
 
-		-- Trainer Target owns Auto Battle starts; skip wild grass while a trainer is selected.
+		-- Skip wild grass while a trainer is selected so Farm and Battle don't fight.
 		if _G.autoEncounterEnabled and not trainerSelected then
 			if type(_G._p) ~= "table" then
 				_G._p = _G.F.findP()
