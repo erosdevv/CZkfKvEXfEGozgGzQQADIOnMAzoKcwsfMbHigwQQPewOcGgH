@@ -4,7 +4,7 @@
 --   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua?v=" .. tostring(tick())))()
 
 local BRANCH = "main"
-local SCRIPT_VERSION = "avatar-asset-morph-1"
+local SCRIPT_VERSION = "avatar-accessories-weld-2"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 
