@@ -472,19 +472,19 @@ _G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
 
 _G.BattleTab:AddSection({ Name = "Trainer Target" })
 
-_G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
-	Name = "Trainer",
-	Default = _G.jackAutoBattle.Trainer,
-	Options = _G.jackTrainerDropdownOptions,
+_G.configUi.jackTrainerIdTextbox = _G.TrainersTab:AddTextbox({
+	Name = "Trainer ID",
+	Default = (_G.jackAutoBattle.Trainer ~= "Disabled" and tostring(_G.jackAutoBattle.Trainer)) or "",
+	TextDisappear = false,
 	Callback = function(value)
-		if _G.jackSyncingDropdownUi then
-			return
-		end
 		_G.F.jackSetAutoTrainer(value)
 	end,
 })
 
-_G.TrainersTab:AddLabel("Trainer list refreshes from chunk NPCs automatically (MrJack-style).")
+-- Keep legacy key so config sync / older hooks don't nil-index.
+_G.configUi.jackTrainerDropdown = _G.configUi.jackTrainerIdTextbox
+
+_G.TrainersTab:AddLabel("Type the trainer #Battle ID (number). Leave blank to disable.")
 
 
 _G.RallyTab:AddSection({ Name = "Rally" })

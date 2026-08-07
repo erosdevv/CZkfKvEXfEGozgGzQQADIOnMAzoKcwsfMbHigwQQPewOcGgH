@@ -432,33 +432,32 @@ _G.F.getJackTrainerListSignature = function()
 	return table.concat(_G.jackTrainerList, "\31")
 end
 
-_G.F.jackBuildTrainerDropdownOptions = function()
-	local options = { "Disabled" }
-	for _, trainerName in ipairs(_G.jackTrainerList) do
-		if trainerName ~= "Disabled" and not table.find(options, trainerName) then
-			table.insert(options, trainerName)
-		end
+_G.F.jackNormalizeTrainerTarget = function(value)
+	local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+	if text == "" or string.lower(text) == "disabled" or text == "0" then
+		return "Disabled"
 	end
-	return options
+	return text
+end
+
+_G.F.jackBuildTrainerDropdownOptions = function()
+	-- Legacy helper; Trainer Target is an ID textbox now.
+	return { "Disabled" }
 end
 
 _G.F.jackSyncTrainerDropdown = function(forceValue)
-	local options = _G.F.jackBuildTrainerDropdownOptions()
-	_G.jackTrainerDropdownOptions = options
+	-- Trainer Target is an ID textbox now; keep this name for config sync callers.
+	local selected = _G.F.jackNormalizeTrainerTarget(forceValue or _G.jackAutoBattle.Trainer)
+	_G.jackAutoBattle.Trainer = selected
+	_G.autoTrainerEnabled = selected ~= "Disabled"
 
-	local dropdown = _G.configUi and _G.configUi.jackTrainerDropdown
-	if type(dropdown) == "table" and type(dropdown.Refresh) == "function" then
-		dropdown:Refresh(options, true)
-	end
-
-	local selected = forceValue or _G.jackAutoBattle.Trainer or "Disabled"
-	if not table.find(options, selected) then
-		selected = "Disabled"
-		_G.jackAutoBattle.Trainer = "Disabled"
-	end
-
-	if type(dropdown) == "table" and type(dropdown.Set) == "function" then
-		_G.F.setDropdownUiValue(dropdown, selected)
+	local textbox = _G.configUi and (_G.configUi.jackTrainerIdTextbox or _G.configUi.jackTrainerDropdown)
+	if type(textbox) == "table" and type(textbox.Set) == "function" then
+		_G.jackSyncingDropdownUi = true
+		pcall(function()
+			textbox:Set(selected == "Disabled" and "" or selected)
+		end)
+		_G.jackSyncingDropdownUi = false
 	end
 end
 
@@ -604,7 +603,8 @@ _G.F.jackScanTrainerNpcs = function()
 	end)
 end
 
--- MrJack runs GetNPCs discovery on its own LooP, independent of Trainer Target.
+-- Optional background scan kept for debugging / legacy helpers; Trainer Target
+-- no longer depends on the dropdown list (users type #Battle IDs directly).
 _G.F.jackRefreshTrainerTargetFromChunk = function()
 	if not _G.F.ensureP() then
 		return
@@ -623,15 +623,8 @@ _G.F.jackRefreshTrainerTargetFromChunk = function()
 		_G.jackTrainerBattleKeys = {}
 	end
 
-	local signature = _G.F.getJackTrainerListSignature()
-	if signature ~= _G.jackLastTrainerListSignature then
-		_G.jackLastTrainerListSignature = signature
-		local forceValue = nil
-		if #_G.jackTrainerList == 0 then
-			forceValue = "Disabled"
-		end
-		_G.F.jackSyncTrainerDropdown(forceValue)
-	end
+	-- Do not overwrite the typed Trainer ID from scan results.
+	_G.jackLastTrainerListSignature = _G.F.getJackTrainerListSignature()
 end
 
 _G.F.jackInstallDoTrainerBattleHook = function()
@@ -902,8 +895,86 @@ _G.F.jackRunAutoMoveTick = function(allowWild)
 	return _G.F.jackUseBattleGuiMove(moveSlot)
 end
 
+_G.F.jackFindNpcByBattleId = function(battleId)
+	if battleId == nil or battleId == "Disabled" or not _G.F.ensureP() then
+		return nil
+	end
+
+	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
+	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
+		return nil
+	end
+
+	local ok, npcs = pcall(function()
+		return collectionManager:GetNPCs()
+	end)
+	if not ok or type(npcs) ~= "table" then
+		return nil
+	end
+
+	local wantText = tostring(battleId)
+	local wantNum = tonumber(battleId)
+	local seen = {}
+	for _, npc in pairs(npcs) do
+		if type(npc) == "table" and not seen[npc] and _G.F.jackIsNpcModel(npc.model) then
+			seen[npc] = true
+			local okBattle, battleValue = pcall(function()
+				return npc.model:FindFirstChild("#Battle")
+			end)
+			if okBattle and battleValue then
+				local okValue, value = pcall(function()
+					return battleValue.Value
+				end)
+				if okValue and value ~= nil then
+					if tostring(value) == wantText
+						or (wantNum ~= nil and tonumber(value) == wantNum)
+						or value == battleId then
+						return npc
+					end
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+_G.F.jackResolveTrainerTarget = function(battleId)
+	battleId = _G.F.jackNormalizeTrainerTarget(battleId)
+	if battleId == "Disabled" or not _G.F.ensureP() then
+		return nil, "No trainer ID set."
+	end
+
+	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
+	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	if type(battles) ~= "table" then
+		return nil, "No battles in this chunk."
+	end
+
+	local trainerData = battles[battleId] or battles[tostring(battleId)] or battles[tonumber(battleId)]
+	if type(trainerData) ~= "table" then
+		return nil, "Trainer ID " .. tostring(battleId) .. " is not in this chunk."
+	end
+
+	local npc = _G.F.jackFindNpcByBattleId(battleId)
+	if not npc then
+		return nil, "NPC for trainer ID " .. tostring(battleId) .. " is not nearby."
+	end
+
+	return {
+		battleKey = tostring(battleId),
+		trainer = trainerData,
+		opponentBaseNPC = npc,
+		currentChunk = currentChunk,
+		battles = battles,
+	}
+end
+
 _G.F.jackRunAutoTrainerTick = function()
-	if _G.jackAutoBattle.Trainer == "Disabled" then
+	local battleId = _G.F.jackNormalizeTrainerTarget(_G.jackAutoBattle.Trainer)
+	_G.jackAutoBattle.Trainer = battleId
+	if battleId == "Disabled" then
 		return false
 	end
 
@@ -911,24 +982,12 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false
 	end
 
-	-- Discovery/sync is owned by jackRefreshTrainerTargetFromChunk (always-on loop).
-	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
-	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
-	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	if type(battles) ~= "table" or next(battles) == nil then
-		return false
+	local resolved, reason = _G.F.jackResolveTrainerTarget(battleId)
+	if not resolved then
+		return false, reason
 	end
 
-	if not table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer) then
-		return false, "Trainer is not loaded in this area."
-	end
-
-	local config = _G.jackTrainerConfigs[_G.jackAutoBattle.Trainer]
-	if type(config) ~= "table" then
-		return false, "Trainer config is not ready."
-	end
-
-	local opponentBaseNPC = config.opponentBaseNPC
+	local opponentBaseNPC = resolved.opponentBaseNPC
 	local opponentModel = type(opponentBaseNPC) == "table" and opponentBaseNPC.model or nil
 	if not _G.F.jackIsNpcModel(opponentModel) then
 		return false, "Trainer NPC is not nearby."
@@ -941,15 +1000,6 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false, "Trainer NPC is not nearby."
 	end
 
-	local battleKey = _G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer]
-	if battleKey and not battles[battleKey] and not battles[tonumber(battleKey)] then
-		table.remove(_G.jackTrainerList, table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer))
-		_G.jackTrainerConfigs[_G.jackAutoBattle.Trainer] = nil
-		_G.jackTrainerBattleKeys[_G.jackAutoBattle.Trainer] = nil
-		_G.F.jackSyncTrainerDropdown("Disabled")
-		return false, "Trainer battle data left this area."
-	end
-
 	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 	if type(masterControl) == "table" and masterControl.WalkEnabled == false then
 		return false
@@ -957,10 +1007,6 @@ _G.F.jackRunAutoTrainerTick = function()
 
 	local activeBattle = _G.F.jackGetBattle()
 	if activeBattle then
-		return false
-	end
-
-	if not table.find(_G.jackTrainerList, _G.jackAutoBattle.Trainer) then
 		return false
 	end
 
@@ -974,16 +1020,13 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false
 	end
 
-	local trainerData = config.trainer
-	if type(trainerData) ~= "table" then
-		return false, "Trainer battle data is missing."
-	end
-
+	local trainerData = resolved.trainer
 	local battleConfig = {
 		trainer = trainerData,
 		opponentBaseNPC = opponentBaseNPC,
 	}
 
+	local currentChunk = resolved.currentChunk
 	if trainerData.Name == "Tamyra" and type(currentChunk) == "table" and currentChunk.id == "chunk20" then
 		battleConfig.fshPct = 0.9
 	end
@@ -1092,8 +1135,9 @@ _G.F.jackSetAutoMove = function(value)
 end
 
 _G.F.jackSetAutoTrainer = function(value)
-	_G.jackAutoBattle.Trainer = value or "Disabled"
-	_G.autoTrainerEnabled = _G.jackAutoBattle.Trainer ~= "Disabled"
+	local selected = _G.F.jackNormalizeTrainerTarget(value)
+	_G.jackAutoBattle.Trainer = selected
+	_G.autoTrainerEnabled = selected ~= "Disabled"
 
 	-- Auto Battle + Trainer Target means trainer farming, not grass encounters.
 	if _G.autoBattleEnabled then
@@ -1118,14 +1162,15 @@ _G.F.jackSetAutoMoveEnabled = function(value)
 end
 
 _G.F.jackSetAutoTrainerEnabled = function(value)
-	if value and _G.jackAutoBattle.Trainer == "Disabled" then
-		local firstTrainer = _G.jackTrainerList[2] or _G.jackTrainerList[1]
-		if firstTrainer and firstTrainer ~= "Disabled" then
-			_G.F.jackSetAutoTrainer(firstTrainer)
+	if value then
+		local current = _G.F.jackNormalizeTrainerTarget(_G.jackAutoBattle.Trainer)
+		if current == "Disabled" then
 			return
 		end
+		_G.F.jackSetAutoTrainer(current)
+		return
 	end
-	_G.F.jackSetAutoTrainer(value and _G.jackAutoBattle.Trainer ~= "Disabled" and _G.jackAutoBattle.Trainer or "Disabled")
+	_G.F.jackSetAutoTrainer("Disabled")
 end
 
 _G.F.jackRunAutoMoveOnce = _G.F.jackRunAutoMoveTick
