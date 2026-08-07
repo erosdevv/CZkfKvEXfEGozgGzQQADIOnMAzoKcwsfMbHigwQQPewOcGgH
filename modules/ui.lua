@@ -364,6 +364,8 @@ _G.configUi.skipDialogueToggle = _G.BattleTab:AddToggle({
 	Color = Color3.fromRGB(90, 200, 255),
 	Callback = function(value)
 		_G.skipDialogueEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
 	end
 })
 
