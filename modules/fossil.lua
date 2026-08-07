@@ -33,6 +33,10 @@ _G.F.getEncounterPool = function()
 		return nil, "Current region has no encounter data."
 	end
 
+	if _G._p.Surf and _G._p.Surf.surfing and regionData.Surf then
+		return regionData.Surf
+	end
+
 	if regionData.Grass and not (regionData.NoGrassIndoors and currentChunk.indoors) then
 		return regionData.Grass
 	end
@@ -41,7 +45,21 @@ _G.F.getEncounterPool = function()
 		return regionData.Grass
 	end
 
-	return nil, "No grass encounter pool found here."
+	if regionData.MiscEncounter then
+		return regionData.MiscEncounter
+	end
+
+	return nil, "No Grass, Surf, or MiscEncounter pool found here."
+end
+
+_G.F.canStartGrassAutoEncounter = function()
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	local currentChunk = type(_G._p) == "table" and _G._p.DataManager and _G._p.DataManager.currentChunk or nil
+	local regionData = currentChunk and currentChunk.regionData
+	return type(regionData) == "table" and regionData.Grass ~= nil
 end
 
 _G.F.startAutoEncounter = function()
@@ -58,9 +76,21 @@ _G.F.startAutoEncounter = function()
 		return false, "Battle already active."
 	end
 
+	if _G.encounterPitySettling then
+		return false, "Waiting for pity to update."
+	end
+
+	if not _G.F.canStartGrassAutoEncounter() then
+		return false, "Auto Encounter requires a grass encounter area."
+	end
+
 	local masterControl = type(_G._p) == "table" and _G._p.MasterControl or nil
 	if type(masterControl) == "table" and masterControl.WalkEnabled == false then
 		return false, "Movement is disabled."
+	end
+
+	if type(_G.F.refreshPityState) == "function" then
+		_G.F.refreshPityState()
 	end
 
 	local pool, reason = _G.F.getEncounterPool()
@@ -127,8 +157,243 @@ _G.F.handleEncounterTargetMatchFound = function(battle)
 	_G.F.pauseAutoEncounterForBattle(battle, displayName, "Target", "Target Found")
 end
 
-_G.F.setAutoEncounterEnabled = function(value)
-	_G.autoEncounterEnabled = value
+_G.F.setAutoEncounterEnabled = function(value, allowEnable)
+	local enabled = value and true or false
+	-- allowEnable == false blocks enable (e.g. startup config). nil/true allow.
+	if enabled and allowEnable == false then
+		return false
+	end
+	_G.autoEncounterEnabled = enabled
+	return true
+end
+
+_G.F.setAutoRunEnabled = function(value)
+	_G.autoRunEnabled = value and true or false
+end
+
+_G.F.setAutoFightCorruptEnabled = function(value)
+	_G.autoFightCorruptEnabled = value and true or false
+end
+
+_G.F.pdsGet = function(actionName, ...)
+	if type(_G.F.pdsGetAction) == "function" then
+		return _G.F.pdsGetAction(actionName, ...)
+	end
+
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	local args = { ... }
+	if type(_G._p) == "table" and type(_G._p.Network) == "table" and type(_G._p.Network.get) == "function" then
+		local ok, result = pcall(function()
+			return _G._p.Network:get("PDS", actionName, unpack(args))
+		end)
+		if ok then
+			return true, result
+		end
+	end
+
+	return false
+end
+
+_G.F.getPityTargetId = function()
+	return _G.pityTargetId == 2 and 2 or 1
+end
+
+_G.F.getPityTargetName = function(pityId)
+	return (pityId or _G.F.getPityTargetId()) == 2 and "Roaming" or "Gleaming"
+end
+
+_G.F.activatePityBoosts = function()
+	local targetId = _G.F.getPityTargetId()
+	local targetName = _G.F.getPityTargetName(targetId)
+
+	local okStatus, boostStatus = _G.F.pdsGet("boostStatus")
+	if not okStatus or type(boostStatus) ~= "table" then
+		_G.lastPityBoostStatus = "Could not read boost status."
+		return false, _G.lastPityBoostStatus
+	end
+
+	local startedBoost = false
+	if not _G.F.isBoostRunning(boostStatus, targetId) then
+		local okUse, tokenCount = _G.F.pdsGet("useBoost", targetId, 1)
+		if not okUse or not tokenCount then
+			_G.lastPityBoostStatus = "Could not start the " .. targetName .. " boost (no tokens?). Pity will not count."
+			return false, _G.lastPityBoostStatus
+		end
+		startedBoost = true
+		task.wait(0.2)
+	end
+
+	local state = _G.F.refreshPityState(true)
+	if (tonumber(state.active) or 0) ~= targetId then
+		_G.F.pdsGet("setActivePity", targetId)
+		task.wait(0.1)
+		state = _G.F.refreshPityState(true)
+	end
+
+	if (tonumber(state.active) or 0) ~= targetId then
+		_G.lastPityBoostStatus = targetName .. " pity switch was rejected by the server."
+		return false, _G.lastPityBoostStatus
+	end
+
+	local remaining = targetId == 1 and state.gleam or state.roam
+	_G.lastPityBoostStatus = string.format(
+		"%s pity active, %s encounters left (boost %s).",
+		targetName,
+		tostring(remaining),
+		startedBoost and "started" or "already running"
+	)
+
+	return true, _G.lastPityBoostStatus
+end
+
+_G.F.setPityBoostsEnabled = function(value)
+	_G.pityBoostsEnabled = value == true
+	_G.pityBoostRunId = (_G.pityBoostRunId or 0) + 1
+	local runId = _G.pityBoostRunId
+
+	if not _G.pityBoostsEnabled then
+		return
+	end
+
+	task.spawn(function()
+		local lastNotified = nil
+
+		while _G.pityBoostsEnabled and _G.uiAlive and runId == _G.pityBoostRunId do
+			local ok, message = _G.F.activatePityBoosts()
+
+			if message ~= lastNotified or not ok then
+				lastNotified = message
+				pcall(function()
+					_G.OrionLib:MakeNotification({
+						Name = ok and "Pity Boosts" or "Pity Boost Error",
+						Content = message,
+						Time = ok and 4 or 6
+					})
+				end)
+			end
+
+			local waitSeconds = ok and 45 or 120
+			for _ = 1, waitSeconds do
+				if not _G.pityBoostsEnabled or not _G.uiAlive or runId ~= _G.pityBoostRunId then
+					return
+				end
+				task.wait(1)
+			end
+		end
+	end)
+end
+
+_G.F.copyPityState = function(state)
+	if type(state) ~= "table" then
+		return { active = 0, gleam = nil, roam = nil }
+	end
+
+	return {
+		active = state.active or 0,
+		gleam = state.gleam,
+		roam = state.roam,
+	}
+end
+
+_G.pityStateFetchedAt = _G.pityStateFetchedAt or 0
+
+_G.F.refreshPityState = function(force)
+	if not force and os.clock() - (_G.pityStateFetchedAt or 0) < 1 then
+		return _G.pityState
+	end
+
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	local network = type(_G._p) == "table" and _G._p.Network or nil
+	if type(network) ~= "table" or type(network.get) ~= "function" then
+		return _G.pityState
+	end
+
+	_G.pityStateFetchedAt = os.clock()
+
+	local ok, status = pcall(function()
+		return network:get("PDS", "boostStatus")
+	end)
+
+	if ok and type(status) == "table" and type(status.p) == "table" then
+		_G.pityState = _G.pityState or {}
+		_G.pityState.active = tonumber(status.p[1]) or 0
+		_G.pityState.gleam = tonumber(status.p[2])
+		_G.pityState.roam = tonumber(status.p[3])
+		_G.pityState.gleamBoostRunning = _G.F.isBoostRunning(status, 1)
+		_G.pityState.roamBoostRunning = _G.F.isBoostRunning(status, 2)
+	end
+
+	return _G.pityState
+end
+
+_G.F.isPityCounting = function(state)
+	state = state or _G.pityState or {}
+	local active = tonumber(state.active) or 0
+
+	if active == 1 then
+		return state.gleamBoostRunning == true
+	end
+
+	if active == 2 then
+		return state.roamBoostRunning == true
+	end
+
+	return false
+end
+
+_G.F.getActivePityCount = function()
+	local state = _G.pityState or {}
+	local active = tonumber(state.active) or 0
+
+	if active == 1 then
+		return state.gleam, 1
+	end
+
+	if active == 2 then
+		return state.roam, 2
+	end
+
+	return nil, active
+end
+
+_G.F.isPityTrackingActive = function()
+	local active = tonumber(_G.pityState and _G.pityState.active) or 0
+	return active == 1 or active == 2
+end
+
+_G.F.waitForPitySettle = function(previousState, timeout)
+	timeout = tonumber(timeout) or _G.pitySettleTimeout or 4
+	local startAt = os.clock()
+
+	while os.clock() - startAt < timeout do
+		if _G.F.getCurrentBattle() then
+			return false, _G.pityState
+		end
+
+		local state = _G.F.refreshPityState(true)
+		if previousState and state then
+			local active = tonumber(state.active) or 0
+			if active == 1 and previousState.gleam ~= nil and state.gleam ~= previousState.gleam then
+				return true, state
+			end
+			if active == 2 and previousState.roam ~= nil and state.roam ~= previousState.roam then
+				return true, state
+			end
+			if active == 0 and (state.gleam ~= previousState.gleam or state.roam ~= previousState.roam) then
+				return true, state
+			end
+		end
+
+		task.wait(0.35)
+	end
+
+	return false, _G.pityState
 end
 
 _G.F.getPetrolithReviveCatalog = function()
@@ -1233,9 +1498,15 @@ end
 
 _G.F.disableAllFeatures = function()
 	_G.autoEncounterEnabled = false
+	_G.autoRunEnabled = false
+	_G.autoFightCorruptEnabled = false
 	_G.autoEncounterPausedBattle = nil
 	_G.autoEncounterPausedDisplayName = nil
 	_G.autoEncounterPausedReason = nil
+	_G.encounterPitySettling = false
+	_G.lastEncounterPitySnapshot = nil
+	_G.pityBoostsEnabled = false
+	_G.pityBoostRunId = (_G.pityBoostRunId or 0) + 1
 	_G.autoCatchEnabled = false
 	_G.F.setAutoFishingEnabled(false)
 	_G.autoBringEnabled = false
@@ -1597,8 +1868,13 @@ _G.F.collectConfigSnapshot = function()
 		keepAll = _G.F.getToggleConfigValue(_G.configUi.keepAllToggle, _G.keepAll),
 		alwaysKeepText = _G.alwaysKeepText,
 		autoEncounterEnabled = _G.F.getToggleConfigValue(_G.configUi.autoEncounterToggle, _G.autoEncounterEnabled),
+		autoRunEnabled = _G.F.getToggleConfigValue(_G.configUi.autoRunToggle, _G.autoRunEnabled),
+		autoFightCorruptEnabled = _G.F.getToggleConfigValue(_G.configUi.autoFightCorruptToggle, _G.autoFightCorruptEnabled),
 		encounterTargetLoomian = _G.encounterTargetLoomian,
 		autoEncounterDelay = _G.autoEncounterDelay,
+		encounterRunDelay = _G.encounterRunDelay,
+		pityBoostsEnabled = _G.pityBoostsEnabled,
+		pityTargetId = _G.pityTargetId,
 		autoCatchEnabled = _G.F.getToggleConfigValue(_G.configUi.autoCatchToggle, _G.autoCatchEnabled),
 		autoCatchDisc = _G.autoCatchDisc,
 		stopOnGleaming = _G.F.getToggleConfigValue(_G.configUi.stopOnGleamingToggle, _G.stopOnGleaming),
@@ -1702,7 +1978,15 @@ _G.F.applyConfigVariables = function(data)
 	end
 
 	if data.autoEncounterEnabled ~= nil then
-		_G.F.setAutoEncounterEnabled(_G.F.configBool(data.autoEncounterEnabled, false))
+		_G.F.setAutoEncounterEnabled(_G.F.configBool(data.autoEncounterEnabled, false), true)
+	end
+
+	if data.autoRunEnabled ~= nil then
+		_G.F.setAutoRunEnabled(_G.F.configBool(data.autoRunEnabled, _G.autoRunEnabled))
+	end
+
+	if data.autoFightCorruptEnabled ~= nil then
+		_G.F.setAutoFightCorruptEnabled(_G.F.configBool(data.autoFightCorruptEnabled, _G.autoFightCorruptEnabled))
 	end
 
 	if data.encounterTargetLoomian ~= nil then
@@ -1711,6 +1995,18 @@ _G.F.applyConfigVariables = function(data)
 
 	if data.autoEncounterDelay ~= nil then
 		_G.autoEncounterDelay = tonumber(data.autoEncounterDelay) or _G.autoEncounterDelay
+	end
+
+	if data.encounterRunDelay ~= nil then
+		_G.encounterRunDelay = tonumber(data.encounterRunDelay) or _G.encounterRunDelay
+	end
+
+	if data.pityTargetId ~= nil then
+		_G.pityTargetId = tonumber(data.pityTargetId) == 2 and 2 or 1
+	end
+
+	if data.pityBoostsEnabled ~= nil then
+		_G.F.setPityBoostsEnabled(data.pityBoostsEnabled and true or false)
 	end
 
 	if data.autoCatchEnabled ~= nil then
@@ -1922,7 +2218,16 @@ _G.F.syncConfigUiFromVariables = function()
 	_G.F.setToggleUi(_G.configUi.keepSecretAbilityToggle, _G.keepSecretAbility)
 	_G.F.setToggleUi(_G.configUi.keepAllToggle, _G.keepAll)
 	_G.F.setToggleUi(_G.configUi.autoEncounterToggle, _G.autoEncounterEnabled)
+	_G.F.setToggleUi(_G.configUi.autoRunToggle, _G.autoRunEnabled)
+	_G.F.setToggleUi(_G.configUi.autoFightCorruptToggle, _G.autoFightCorruptEnabled)
 	_G.F.setSliderUi(_G.configUi.encounterDelay, _G.autoEncounterDelay)
+	_G.F.setSliderUi(_G.configUi.encounterRunDelay, _G.encounterRunDelay)
+	_G.F.setToggleUi(_G.configUi.pityBoostsToggle, _G.pityBoostsEnabled)
+	if _G.configUi.pityTargetDropdown and type(_G.configUi.pityTargetDropdown.Set) == "function" then
+		pcall(function()
+			_G.configUi.pityTargetDropdown:Set(_G.pityTargetId == 2 and "Roaming" or "Gleaming")
+		end)
+	end
 	_G.F.setToggleUi(_G.configUi.autoCatchToggle, _G.autoCatchEnabled)
 	_G.F.setToggleUi(_G.configUi.stopOnGleamingToggle, _G.stopOnGleaming)
 	_G.F.setToggleUi(_G.configUi.stopOnGammaToggle, _G.stopOnGamma)

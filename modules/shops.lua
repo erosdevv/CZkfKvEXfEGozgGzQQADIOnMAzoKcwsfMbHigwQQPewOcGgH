@@ -1958,6 +1958,10 @@ _G.F.shouldCatchWildBattle = function(battle)
 		return false
 	end
 
+	if type(_G.F.isCorruptWildFoe) == "function" and _G.F.isCorruptWildFoe(battle) then
+		return false
+	end
+
 	if _G.F.isFishingGoppieBattle(battle) then
 		if not _G.F.hasWildFoeLoaded(battle) then
 			return true
@@ -1977,6 +1981,10 @@ _G.F.shouldCatchWildBattle = function(battle)
 
 	if _G.F.isMatchingRoamingLegendaryFoe(battle) then
 		return true
+	end
+
+	if type(_G.F.getWildSpecialFoeForCatch) == "function" then
+		return _G.F.getWildSpecialFoeForCatch(battle) ~= nil
 	end
 
 	return _G.F.getWildSpecialFoeForStop(battle) ~= nil
