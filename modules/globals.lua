@@ -276,13 +276,16 @@ _G.alwaysKeepList = {}
 _G.MARK_RELEASE = 1
 _G.MARK_KEEP = 2
 
--- Encounter
+-- Encounter / Farm
 _G.autoEncounterEnabled = false
+_G.autoRunEnabled = true
+_G.autoFightCorruptEnabled = true
 _G.encounterTargetLoomian = ""
 _G.autoEncounterDelay = 1.25
+_G.encounterRunDelay = 2.5
 _G.focusedRunDelay = 0.12
 _G.backgroundRunDelay = 0.35
-_G.encounterReleaseDelay = 0.75
+_G.encounterReleaseDelay = 1.75
 _G.focusedEndDelay = 0.15
 _G.backgroundEndDelay = 1.25
 _G.fastForwardStuckDelay = 4
@@ -291,6 +294,20 @@ _G.encounterTargetStopBattle = nil
 _G.autoEncounterPausedBattle = nil
 _G.autoEncounterPausedDisplayName = nil
 _G.autoEncounterPausedReason = nil
+_G.pityState = { active = 0, gleam = nil, roam = nil }
+_G.pityRunMinDelay = 1.0
+_G.pitySettleTimeout = 4
+_G.encounterPitySettling = false
+_G.pityBoostsEnabled = false
+_G.pityTargetId = 1 -- 1 = Gleaming, 2 = Roaming
+_G.pityBoostRunId = 0
+_G.lastPityBoostStatus = "Not run yet."
+_G.lastEncounterPitySnapshot = nil
+_G.battleAutoRunTiming = setmetatable({}, { __mode = "k" })
+_G.battleIntroCompletedAt = {}
+_G.battleMoveLastRequest = _G.battleMoveLastRequest or {}
+_G.battleMovePendingRequest = _G.battleMovePendingRequest or {}
+_G.battleMovePendingAt = _G.battleMovePendingAt or {}
 
 _G.autoCatchEnabled = false
 _G.autoCatchDisc = "Adv. Disc"

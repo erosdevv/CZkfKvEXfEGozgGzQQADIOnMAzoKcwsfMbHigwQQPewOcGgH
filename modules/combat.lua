@@ -2516,8 +2516,16 @@ _G.F.releaseFinishedBattle = function(battle)
 		return
 	end
 
+	if _G.F.getCurrentBattle() == battle and battle.ended ~= true then
+		return
+	end
+
 	_G.F.clearBattleRunTiming(battle)
-	_G.F.setBattleFastForward(false, battle)
+	if type(_G.F.clearEncounterFastForward) == "function" then
+		_G.F.clearEncounterFastForward(battle)
+	else
+		_G.F.setBattleFastForward(false, battle)
+	end
 
 	_G.F.callBattleCameraMethod("stopIdleCamera", battle)
 	_G.F.callBattleCameraMethod("StopIdleCamera", battle)
@@ -2527,6 +2535,10 @@ _G.F.releaseFinishedBattle = function(battle)
 	end)
 
 	_G.F.clearCurrentBattleReference(battle)
+
+	if type(_G.F.ensureWalkEnabled) == "function" then
+		pcall(_G.F.ensureWalkEnabled)
+	end
 end
 
 _G.F.releaseBattleAutomationForCapture = function(battle)
@@ -2535,8 +2547,12 @@ _G.F.releaseBattleAutomationForCapture = function(battle)
 	end
 
 	_G.F.clearBattleRunTiming(battle)
-	_G.F.applyBattleAnimationFastForward(battle, false, false)
-	_G.F.setBattleFastForward(false, battle)
+	if type(_G.F.clearEncounterFastForward) == "function" then
+		_G.F.clearEncounterFastForward(battle)
+	else
+		_G.F.applyBattleAnimationFastForward(battle, false, false)
+		_G.F.setBattleFastForward(false, battle)
+	end
 end
 
 _G.F.setAutoEncounterToggleState = function(value)
@@ -2603,14 +2619,16 @@ _G.F.resumeAutoEncounterAfterPausedBattle = function(battle)
 	_G.autoEncounterPausedDisplayName = nil
 	_G.autoEncounterPausedReason = nil
 
-	_G.autoEncounterEnabled = true
-	_G.F.setAutoEncounterToggleState(true)
-
+	-- Match Farm reference: leave Auto Encounter off so the player can deal
+	-- with the special manually and re-enable when ready.
 	pcall(function()
 		_G.OrionLib:MakeNotification({
-			Name = "Auto Encounter Resumed",
-			Content = string.format("Auto Encounter resumed after %s.", tostring(displayName)),
-			Time = 4,
+			Name = "Special Encounter Ended",
+			Content = string.format(
+				"%s encounter finished. Auto Encounter stays off until you turn it on.",
+				tostring(displayName)
+			),
+			Time = 5,
 		})
 	end)
 
@@ -2669,6 +2687,18 @@ end
 
 _G.F.skipEncounterCutscene = function(battle)
 	if type(battle) ~= "table" then
+		return
+	end
+
+	if type(_G.F.isEncounterAutomationActive) == "function" and _G.F.isEncounterAutomationActive() then
+		return
+	end
+
+	if type(_G.F.shouldProtectWildEncounterIntro) == "function" and _G.F.shouldProtectWildEncounterIntro(battle) then
+		return
+	end
+
+	if type(_G.F.shouldSkipWildEncounterIntro) == "function" and not _G.F.shouldSkipWildEncounterIntro(battle) then
 		return
 	end
 

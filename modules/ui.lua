@@ -68,7 +68,25 @@ _G.configUi.autoEncounterToggle = _G.EncountersTab:AddToggle({
 	Default = _G.autoEncounterEnabled,
 	Color = Color3.fromRGB(0, 190, 180),
 	Callback = function(value)
-		_G.F.setAutoEncounterEnabled(value)
+		_G.F.setAutoEncounterEnabled(value, true)
+	end
+})
+
+_G.configUi.autoRunToggle = _G.EncountersTab:AddToggle({
+	Name = "Auto Run",
+	Default = _G.autoRunEnabled,
+	Color = Color3.fromRGB(90, 200, 255),
+	Callback = function(value)
+		_G.F.setAutoRunEnabled(value)
+	end
+})
+
+_G.configUi.autoFightCorruptToggle = _G.EncountersTab:AddToggle({
+	Name = "Fight Corrupt",
+	Default = _G.autoFightCorruptEnabled,
+	Color = Color3.fromRGB(220, 90, 90),
+	Callback = function(value)
+		_G.F.setAutoFightCorruptEnabled(value)
 	end
 })
 
@@ -93,6 +111,18 @@ _G.configUi.encounterDelay = _G.EncountersTab:AddSlider({
 	end
 })
 
+_G.configUi.encounterRunDelay = _G.EncountersTab:AddSlider({
+	Name = "Run Delay",
+	Min = 1,
+	Max = 6,
+	Default = _G.encounterRunDelay,
+	Increment = 0.25,
+	ValueName = "s",
+	Callback = function(value)
+		_G.encounterRunDelay = value
+	end
+})
+
 _G.EncountersTab:AddButton({
 	Name = "Start Encounter Now",
 	Icon = "zap",
@@ -106,6 +136,53 @@ _G.EncountersTab:AddButton({
 				Time = 4
 			})
 		end
+	end
+})
+
+_G.EncountersTab:AddSection({ Name = "Pity" })
+
+_G.configUi.pityTargetDropdown = _G.EncountersTab:AddDropdown({
+	Name = "Pity Target",
+	Default = _G.pityTargetId == 2 and "Roaming" or "Gleaming",
+	Options = { "Gleaming", "Roaming" },
+	Callback = function(value)
+		_G.pityTargetId = value == "Roaming" and 2 or 1
+		if _G.pityBoostsEnabled then
+			_G.F.setPityBoostsEnabled(true)
+		end
+	end
+})
+
+_G.configUi.pityBoostsToggle = _G.EncountersTab:AddToggle({
+	Name = "Auto Pity Boosts",
+	Default = _G.pityBoostsEnabled,
+	Color = Color3.fromRGB(255, 180, 80),
+	Callback = function(value)
+		_G.F.setPityBoostsEnabled(value)
+	end
+})
+
+_G.EncountersTab:AddButton({
+	Name = "Show Pity Status",
+	Icon = "info",
+	Callback = function()
+		local state = _G.F.refreshPityState(true)
+		local content
+		if (tonumber(state.active) or 0) == 1 then
+			content = string.format("Gleaming pity active: %s encounters left.", tostring(state.gleam))
+		elseif (tonumber(state.active) or 0) == 2 then
+			content = string.format("Roaming pity active: %s encounters left.", tostring(state.roam))
+		else
+			content = "No pity switch is active."
+		end
+		if not _G.F.isPityCounting(state) and (tonumber(state.active) or 0) ~= 0 then
+			content = content .. "\nWARNING: the matching boost is NOT running - encounters are not counting!"
+		end
+		_G.OrionLib:MakeNotification({
+			Name = "Pity Status",
+			Content = content,
+			Time = 6,
+		})
 	end
 })
 
@@ -1267,6 +1344,8 @@ end)
 
 _G.startupConfigApplied = false
 if _G.startupConfig then
+	-- Never auto-enable Auto Encounter from autosave on script execute.
+	_G.startupConfig.autoEncounterEnabled = nil
 	local ok, err = pcall(function()
 		_G.F.applyConfigSnapshot(_G.startupConfig, true)
 	end)
@@ -1538,11 +1617,22 @@ end)
 
 do
 	_G.CodexGetEndDelay = function()
-		return _G.windowFocused and _G.focusedEndDelay or _G.backgroundEndDelay
+		local base = math.max(
+			_G.encounterRunDelay or 1.5,
+			_G.windowFocused and _G.focusedEndDelay or _G.backgroundEndDelay
+		)
+		if type(_G.F.isPityTrackingActive) == "function" and _G.F.isPityTrackingActive() then
+			return math.max(base, _G.pityRunMinDelay or 1)
+		end
+		return base
 	end
 
 	_G.CodexGetEndRetryDelay = function()
-		return _G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay
+		local base = _G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay
+		if type(_G.F.isPityTrackingActive) == "function" and _G.F.isPityTrackingActive() then
+			return math.max(base, 0.35)
+		end
+		return base
 	end
 
 	_G.CodexTryRunBattle = function(battle, forceSkip)
@@ -1554,44 +1644,88 @@ do
 			return false
 		end
 
-		if forceSkip then
-			_G.F.setBattleFastForward(true, battle)
-			_G.F.skipEncounterCutscene(battle)
-		elseif _G.autoEncounterEnabled then
-			_G.F.setBattleFastForward(true, battle)
-			_G.F.applyBattleAnimationFastForward(battle, false)
+		if _G.F.hasWildFoeLoaded(battle) and not _G.F.isNormalWildEncounter(battle) then
+			return false
 		end
 
-		if _G.autoEncounterEnabled and not (_G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle)) then
-			-- Auto Use Move + Auto Encounter: attack instead of running, so
-			-- encounters get KO'd for EXP rather than fled from.
+		if forceSkip and not (_G.F.isEncounterAutomationActive() or _G.autoRunEnabled) then
+			if _G.F.shouldSkipWildEncounterIntro(battle) then
+				_G.F.setBattleFastForward(true, battle)
+				_G.F.skipEncounterCutscene(battle)
+			end
+		elseif _G.autoEncounterEnabled or _G.autoCatchEnabled then
+			_G.F.clearEncounterFastForward(battle)
+		end
+
+		if _G.F.shouldAutoRunFromBattle(battle) then
+			local menuReadyAt = _G.F.trackBattleAutoRunDelay(battle)
+			if not _G.F.canAutoRunFromBattle(battle, menuReadyAt) then
+				return false
+			end
+
+			if type(_G.F.refreshPityState) == "function" then
+				_G.F.refreshPityState()
+			end
+			return _G.F.naturalRunFromBattle(battle, false, false)
+		end
+
+		-- Auto Encounter without Auto Run: still flee normals after delay,
+		-- unless Auto Use Move is fighting for EXP.
+		if _G.autoEncounterEnabled
+			and not (_G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle))
+			and _G.F.isNormalWildEncounter(battle) then
 			if _G.autoMoveOneEnabled then
 				return _G.F.useMoveOne(battle)
 			end
 
-			return _G.F.naturalRunFromBattle(battle, true)
+			local menuReadyAt = _G.F.trackBattleAutoRunDelay(battle)
+			if not _G.F.canFleeAfterAutoRunDelay(battle, menuReadyAt) then
+				return false
+			end
+			return _G.F.naturalRunFromBattle(battle, false, false)
 		end
 
 		return false
 	end
+
+	-- Always fight corrupt wilds with move 1 (does not require Auto Use Move).
+	task.spawn(function()
+		while _G.uiAlive do
+			if _G.autoFightCorruptEnabled then
+				local battle = _G.F.getCurrentBattle()
+				if type(battle) == "table"
+					and not battle.ended
+					and _G.F.isCorruptWildFoe(battle)
+					and (
+						_G.F.isBattleIntroComplete(battle)
+						or _G.F.isBattleMainMenuOpen()
+						or _G.F.isBattleMoveMenuOpen()
+						or battle.state == "input"
+						or battle.readyForActions == true
+					) then
+					_G.F.useCorruptBattleMoveOne(battle)
+					task.wait(0.15)
+				else
+					task.wait(0.2)
+				end
+			else
+				task.wait(0.25)
+			end
+		end
+	end)
 
 	task.spawn(function()
 		local lastBattleObject = nil
 		local lastBattleSeenAt = 0
 		local battleFirstSeenAt = 0
 		local lastEndAttemptAt = 0
-		local lastBattleProgressSignature = nil
-		local lastBattleProgressAt = 0
 
 		while _G.uiAlive do
-			if _G.autoEncounterEnabled or _G.autoEncounterPausedBattle then
+			if _G.F.isAutoRunBattleLoopActive() then
 				if type(_G._p) ~= "table" then
 					_G._p = _G.F.findP()
 				end
 
-				-- Wild wins grant mastery too; when fighting encounters (Auto
-				-- Use Move) the level-up report would block doWildBattle just
-				-- like trainer battles, so click it through here as well.
 				if _G.autoMoveOneEnabled then
 					pcall(function()
 						_G.F.dismissMasteryReport()
@@ -1608,82 +1742,127 @@ do
 							and (_G.autoFishingEnabled or _G.fastForwardEnabled or (_G.autoCatchEnabled and catchManaged)) then
 							task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
 						else
-						lastBattleSeenAt = now
+							lastBattleSeenAt = now
 
-						if battle ~= lastBattleObject then
-							lastBattleObject = battle
-							battleFirstSeenAt = now
-							lastEndAttemptAt = 0
-							lastBattleProgressSignature = _G.F.getBattleProgressSignature(battle)
-							lastBattleProgressAt = now
-							_G.F.skipEncounterCutscene(battle)
-						end
-
-						local targetMatch = _G.F.isMatchingEncounterTargetFoe(battle)
-						local roamerMatch = _G.F.isMatchingRoamingLegendaryFoe(battle)
-
-						if targetMatch then
-							_G.F.handleEncounterTargetMatchFound(battle)
-						end
-
-						if roamerMatch then
-							_G.F.handleRoamingLegendaryFound(battle)
-						end
-
-						local automationPausedForGleaming = _G.F.pauseNaturalRunForSpecialBattle(battle)
-						local automationPausedForFoundEncounter = _G.autoEncounterPausedBattle == battle
-
-						if not automationPausedForFoundEncounter and not targetMatch and not roamerMatch and not catchManaged and not automationPausedForGleaming then
-							local battleProgressSignature = _G.F.getBattleProgressSignature(battle)
-							if battleProgressSignature ~= lastBattleProgressSignature then
-								lastBattleProgressSignature = battleProgressSignature
-								lastBattleProgressAt = now
-							end
-
-							if not _G.F.isBattleSetupPending(battle) then
-								_G.F.setBattleFastForward(true, battle)
-								_G.F.applyBattleAnimationFastForward(battle, false)
-
-								if now - lastBattleProgressAt >= _G.fastForwardStuckDelay then
-									_G.F.nudgeFastForwardBattle(battle)
-									lastBattleProgressAt = now
+							if battle ~= lastBattleObject then
+								if lastBattleObject then
+									_G.F.clearBattleRunTiming(lastBattleObject)
+								end
+								_G.F.clearBattleRunTiming(battle)
+								_G.battleMoveLastRequest.corrupt = nil
+								_G.battleMovePendingRequest.corrupt = nil
+								lastBattleObject = battle
+								battleFirstSeenAt = now
+								lastEndAttemptAt = 0
+								if type(_G.F.refreshPityState) == "function" then
+									_G.F.refreshPityState()
 								end
 							end
 
-							local battleAge = now - battleFirstSeenAt
-							local retryAge = lastEndAttemptAt == 0 and math.huge or now - lastEndAttemptAt
-
-							if _G.autoMoveOneEnabled
-								and battleAge >= _G.CodexGetEndDelay()
-								and retryAge >= _G.CodexGetEndRetryDelay() then
-								-- Attack branch first: with Auto Use Move on, every
-								-- non-special encounter gets fought (even wrong-target
-								-- ones), instead of being run from.
-								lastEndAttemptAt = now
-								_G.CodexTryRunBattle(battle, false)
-							elseif _G.F.isWrongEncounterTargetFoe(battle) and _G.F.isBattleRunMenuReady(battle, true) then
-								lastEndAttemptAt = now
-								_G.CodexTryRunBattle(battle, false)
-							elseif not _G.F.shouldFilterEncounterTarget()
-								and battleAge >= _G.CodexGetEndDelay()
-								and retryAge >= _G.CodexGetEndRetryDelay() then
-								lastEndAttemptAt = now
-								_G.CodexTryRunBattle(battle, false)
+							if _G.autoEncounterEnabled or _G.autoEncounterPausedBattle then
+								if battle.pauseAfterSwitchFlag == true
+									or _G.F.isBattleSetupPending(battle)
+									or _G.F.isBattleDialogueActive() then
+									_G.F.enforceWildEncounterIntro(battle)
+								else
+									_G.F.clearEncounterFastForward(battle)
+								end
 							end
-						end
 
-						task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
+							local targetMatch = _G.F.isMatchingEncounterTargetFoe(battle)
+							local roamerMatch = _G.F.isMatchingRoamingLegendaryFoe(battle)
+
+							if targetMatch then
+								_G.F.handleEncounterTargetMatchFound(battle)
+							end
+
+							if roamerMatch and not catchManaged then
+								_G.F.handleRoamingLegendaryFound(battle)
+							end
+
+							local automationPausedForGleaming = false
+							if not catchManaged then
+								automationPausedForGleaming = _G.F.pauseNaturalRunForSpecialBattle(battle)
+							end
+
+							local automationPausedForFoundEncounter = _G.autoEncounterPausedBattle == battle
+							local menuReadyAt = _G.F.trackBattleAutoRunDelay(battle)
+
+							if battle.ended == true or battle.done == true then
+								_G.F.releaseFinishedBattle(battle)
+								_G.F.clearCurrentBattleReference(battle)
+								_G.F.clearNaturalRunSpecialPause(battle)
+								_G.battleMoveLastRequest.corrupt = nil
+								_G.battleMovePendingRequest.corrupt = nil
+								lastBattleObject = nil
+								battleFirstSeenAt = 0
+								lastEndAttemptAt = 0
+							elseif _G.F.isCorruptWildFoe(battle)
+								and (_G.autoRunEnabled or _G.autoEncounterEnabled or _G.autoFightCorruptEnabled) then
+								local retryAge = lastEndAttemptAt == 0 and math.huge or now - lastEndAttemptAt
+								local readyToFight = _G.F.isBattleIntroComplete(battle)
+									or _G.F.isBattleMainMenuOpen()
+									or _G.F.isBattleMoveMenuOpen()
+									or battle.state == "input"
+									or battle.readyForActions == true
+
+								if readyToFight and retryAge >= math.min(0.12, _G.CodexGetEndRetryDelay()) then
+									lastEndAttemptAt = now
+									_G.F.useCorruptBattleMoveOne(battle)
+								end
+							elseif (
+									_G.F.shouldAutoRunFromBattle(battle)
+									or (_G.autoEncounterEnabled and not _G.autoMoveOneEnabled)
+									or (_G.autoEncounterEnabled and _G.autoMoveOneEnabled)
+								)
+								and not automationPausedForFoundEncounter
+								and not targetMatch
+								and not roamerMatch
+								and not catchManaged
+								and not automationPausedForGleaming then
+								local retryAge = lastEndAttemptAt == 0 and math.huge or now - lastEndAttemptAt
+
+								if _G.autoMoveOneEnabled
+									and _G.autoEncounterEnabled
+									and retryAge >= _G.CodexGetEndRetryDelay()
+									and _G.F.isBattleIntroComplete(battle) then
+									lastEndAttemptAt = now
+									_G.F.useMoveOne(battle)
+								elseif _G.F.isWrongEncounterTargetFoe(battle)
+									and _G.F.canFleeAfterAutoRunDelay(battle, menuReadyAt) then
+									lastEndAttemptAt = now
+									_G.CodexTryRunBattle(battle, false)
+								elseif not _G.F.shouldFilterEncounterTarget()
+									and _G.F.canFleeAfterAutoRunDelay(battle, menuReadyAt)
+									and retryAge >= _G.CodexGetEndRetryDelay() then
+									lastEndAttemptAt = now
+									_G.CodexTryRunBattle(battle, false)
+								end
+							end
+
+							task.wait(_G.windowFocused and _G.focusedRunDelay or _G.backgroundRunDelay)
 						end
 					else
-						if lastBattleObject and (now - lastBattleSeenAt) >= _G.encounterReleaseDelay then
+						local releaseDelay = type(_G.F.getEncounterReleaseDelay) == "function"
+							and _G.F.getEncounterReleaseDelay()
+							or (_G.encounterReleaseDelay or 1.75)
+
+						if lastBattleObject
+							and not _G.F.getCurrentBattle()
+							and (now - lastBattleSeenAt) >= releaseDelay then
+							if _G.encounterPitySettling and type(_G.F.waitForPitySettle) == "function" then
+								_G.F.waitForPitySettle(_G.lastEncounterPitySnapshot, _G.pitySettleTimeout)
+								_G.encounterPitySettling = false
+								_G.lastEncounterPitySnapshot = nil
+							end
+
 							_G.F.releaseFinishedBattle(lastBattleObject)
+							_G.F.clearCurrentBattleReference(lastBattleObject)
 							_G.F.clearNaturalRunSpecialPause(lastBattleObject)
 							_G.F.resumeAutoEncounterAfterPausedBattle(lastBattleObject)
 							lastBattleObject = nil
 							battleFirstSeenAt = 0
 							lastEndAttemptAt = 0
-							lastBattleProgressSignature = nil
-							lastBattleProgressAt = 0
 						elseif _G.autoEncounterPausedBattle then
 							_G.F.resumeAutoEncounterAfterPausedBattle(nil)
 						end
@@ -1698,12 +1877,12 @@ do
 				lastBattleObject = nil
 				battleFirstSeenAt = 0
 				lastEndAttemptAt = 0
-				lastBattleProgressSignature = nil
-				lastBattleProgressAt = 0
 				task.wait(0.2)
 			end
 		end
 	end)
+end
+
 end
 
 
@@ -1716,34 +1895,38 @@ task.spawn(function()
 			and _G.jackAutoBattle.Trainer
 			and _G.jackAutoBattle.Trainer ~= "Disabled"
 
-		-- Trainer Target owns Auto Battle starts; skip wild grass while a trainer is selected.
+		-- Skip wild grass while a trainer is selected so Farm and Battle don't fight.
 		if _G.autoEncounterEnabled and not trainerSelected then
-			if type(_G._p) ~= "table" then
-				_G._p = _G.F.findP()
-			end
-
-			local started, reason = _G.F.startAutoEncounter()
-
-			if not started and reason and reason ~= "Battle already active." and reason ~= lastFailure then
-				lastFailure = reason
-
-				local now = os.clock()
-				if now - lastFailureNoticeAt >= 4 then
-					lastFailureNoticeAt = now
-
-					pcall(function()
-						_G.OrionLib:MakeNotification({
-							Name = "Auto Encounter",
-							Content = reason,
-							Time = 4
-						})
-					end)
+			if _G.encounterPitySettling then
+				task.wait(0.25)
+			else
+				if type(_G._p) ~= "table" then
+					_G._p = _G.F.findP()
 				end
-			elseif started then
-				lastFailure = nil
-			end
 
-			task.wait(_G.autoEncounterDelay)
+				local started, reason = _G.F.startAutoEncounter()
+
+				if not started and reason and reason ~= "Battle already active." and reason ~= lastFailure then
+					lastFailure = reason
+
+					local now = os.clock()
+					if now - lastFailureNoticeAt >= 4 then
+						lastFailureNoticeAt = now
+
+						pcall(function()
+							_G.OrionLib:MakeNotification({
+								Name = "Auto Encounter",
+								Content = reason,
+								Time = 4
+							})
+						end)
+					end
+				elseif started then
+					lastFailure = nil
+				end
+
+				task.wait(_G.autoEncounterDelay)
+			end
 		else
 			lastFailure = nil
 			task.wait(0.2)

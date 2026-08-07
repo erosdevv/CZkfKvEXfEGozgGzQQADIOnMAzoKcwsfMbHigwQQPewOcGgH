@@ -38,12 +38,23 @@ end
 
 _G.F.setBattleFastForward = function(enabled, battle)
 	if type(_G.F.installBattleCameraSafetyHooks) == "function" then
-		_G.F.installBattleCameraSafetyHooks()
+		pcall(_G.F.installBattleCameraSafetyHooks)
 	end
 
 	battle = battle or _G.F.getCurrentBattle()
 
 	if not battle then
+		return
+	end
+
+	-- Farm / Auto Catch: never FF protected wild intros or specials.
+	if enabled and type(_G.F.isEncounterAutomationActive) == "function" and _G.F.isEncounterAutomationActive() then
+		return
+	end
+	if enabled and type(_G.F.shouldProtectWildEncounterIntro) == "function" and _G.F.shouldProtectWildEncounterIntro(battle) then
+		return
+	end
+	if enabled and type(_G.F.isProtectedWildEncounter) == "function" and _G.F.isProtectedWildEncounter(battle) then
 		return
 	end
 
@@ -854,6 +865,895 @@ _G.F.hasWildFoeLoaded = function(battle)
 		and type(battle.p2.monsters[1]) == "table"
 end
 
+-- === Farm / Auto Run helpers (ported) ===
+_G.F.isEncounterAutomationActive = function()
+	return _G.autoEncounterEnabled == true or _G.autoCatchEnabled == true
+end
+
+_G.F.isAutoRunBattleLoopActive = function()
+	return _G.autoRunEnabled == true
+		or _G.autoEncounterEnabled == true
+		or _G.autoEncounterPausedBattle ~= nil
+end
+
+_G.F.shouldAutoRunFromBattle = function(battle)
+	if not _G.autoRunEnabled then
+		return false
+	end
+
+	if type(battle) ~= "table" or battle.kind ~= "wild" or battle.ended == true then
+		return false
+	end
+
+	if _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle) then
+		return false
+	end
+
+	if _G.F.isCorruptWildFoe(battle) then
+		return false
+	end
+
+	return _G.F.isNormalWildEncounter(battle)
+end
+_G.F.shouldProtectWildEncounterIntro = function(battle)
+	battle = battle or _G.F.getCurrentBattle()
+	if type(battle) ~= "table" or battle.ended or battle.kind ~= "wild" then
+		return false
+	end
+
+	if not (_G.autoEncounterEnabled or _G.autoCatchEnabled or _G.autoEncounterPausedBattle) then
+		return false
+	end
+
+	return not _G.F.isBattleIntroComplete(battle)
+end
+
+_G.F.enforceWildEncounterIntro = function(battle)
+	if not _G.F.shouldProtectWildEncounterIntro(battle) then
+		return
+	end
+
+	_G.fastForwardBattles[battle] = nil
+	_G.F.clearEncounterFastForward(battle)
+
+	_G.F.safeTableSet(battle, "fastForward", false)
+	_G.F.safeTableSet(battle, "FastForward", false)
+	_G.F.safeTableSet(battle, "skipping", false)
+	_G.F.safeTableSet(battle, "skipRequested", false)
+	_G.F.safeTableSet(battle, "skipIntroRequested", false)
+	_G.F.safeTableSet(battle, "skipChallengeMessage", false)
+
+	local scene = _G.F.safeTableGet(battle, "scene")
+	if type(scene) == "table" then
+		_G.F.applyFastForwardFlagsToTable(scene, false)
+		_G.F.safeTableSet(scene, "skipping", false)
+	end
+end
+_G.F.clearNpcChatFastForward = function()
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	if type(_G._p) == "table" and type(_G._p.NPCChat) == "table" then
+		pcall(function()
+			_G._p.NPCChat.fastForward = false
+			_G._p.NPCChat.skipping = false
+		end)
+	end
+end
+
+_G.F.clearEncounterFastForward = function(battle)
+	if type(battle) ~= "table" then
+		return
+	end
+
+	_G.F.applyBattleAnimationFastForward(battle, false, false)
+	_G.F.setBattleFastForward(false, battle)
+
+	_G.F.safeTableSet(battle, "skipping", false)
+	_G.F.safeTableSet(battle, "skipRequested", false)
+	_G.F.safeTableSet(battle, "skipIntroRequested", false)
+
+	local scene = _G.F.safeTableGet(battle, "scene")
+	if type(scene) == "table" then
+		_G.F.applyFastForwardFlagsToTable(scene, false)
+		_G.F.safeTableSet(scene, "skipping", false)
+	end
+
+	_G.F.clearNpcChatFastForward()
+end
+_G.F.isValuableAutoEncounterBattle = function(battle)
+	if type(battle) ~= "table" then
+		return false
+	end
+
+	if _G.autoEncounterPausedBattle == battle then
+		return true
+	end
+
+	if _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle) then
+		return true
+	end
+
+	if _G.F.isMatchingEncounterTargetFoe(battle) then
+		return true
+	end
+
+	if _G.F.isMatchingRoamingLegendaryFoe(battle) then
+		return true
+	end
+
+	if _G.F.getWildSpecialFoeForCatch(battle) then
+		return true
+	end
+
+	return false
+end
+
+-- Only gleaming/gamma/wisp/roamer/target — not every forme variant.
+_G.F.isConfirmedSpecialWildEncounter = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" or not _G.F.hasWildFoeLoaded(battle) then
+		return false
+	end
+
+	if _G.autoEncounterPausedBattle == battle then
+		return true
+	end
+
+	if _G.CatchAutomation and _G.CatchAutomation:shouldCatchBattle(battle) then
+		return true
+	end
+
+	if _G.F.isMatchingEncounterTargetFoe(battle) then
+		return true
+	end
+
+	if _G.F.isMatchingRoamingLegendaryFoe(battle) then
+		return true
+	end
+
+	return _G.F.isSpecialWildFoe(battle)
+end
+
+-- Wild gleaming/roamer/special battles must play out normally for Auto Catch.
+-- Also holds off skip/FF until the foe model is loaded.
+_G.F.isProtectedWildEncounter = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" then
+		return false
+	end
+
+	if not _G.F.hasWildFoeLoaded(battle) then
+		return true
+	end
+
+	return _G.F.isConfirmedSpecialWildEncounter(battle)
+end
+
+_G.F.shouldSkipWildEncounterIntro = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" then
+		return true
+	end
+
+	if _G.F.isProtectedWildEncounter(battle) then
+		return false
+	end
+
+	return _G.F.hasWildFoeLoaded(battle)
+end
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	local constants = type(_G._p) == "table" and _G._p.Constants or nil
+	local value = type(constants) == "table" and tonumber(constants.CORRUPT_GLEAM_NUM) or nil
+	return value or 3
+end
+
+_G.F.isCorruptGleamValue = function(value)
+	local corruptGleam = _G.F.getCorruptGleamNum()
+	return tonumber(value) == corruptGleam
+end
+
+_G.F.isCorruptMonster = function(monster)
+	if type(monster) ~= "table" then
+		return false
+	end
+
+	if _G.F.safeTableGet(monster, "corrupt") == true or _G.F.safeTableGet(monster, "isCorrupt") == true then
+		return true
+	end
+
+	-- Name / forme strings sometimes carry the corrupt flag before gleam nums resolve.
+	for _, key in ipairs({ "name", "species", "forme", "form", "baseSpecies" }) do
+		local text = string.lower(tostring(_G.F.safeTableGet(monster, key) or ""))
+		if text ~= "" and string.find(text, "corrupt", 1, true) then
+			return true
+		end
+	end
+
+	for _, key in ipairs({ "shiny", "gleam", "particle", "gl", "gleaming" }) do
+		if _G.F.isCorruptGleamValue(_G.F.safeTableGet(monster, key)) then
+			return true
+		end
+	end
+
+	local summary = _G.F.safeTableGet(monster, "summ")
+	if type(summary) == "table" then
+		if summary.corrupt == true or summary.isCorrupt == true then
+			return true
+		end
+		for _, key in ipairs({ "shiny", "gleam", "gl", "gleaming", "particle" }) do
+			if _G.F.isCorruptGleamValue(_G.F.safeTableGet(summary, key)) then
+				return true
+			end
+		end
+	end
+
+	local modelData = _G.F.safeTableGet(monster, "modelData")
+	if type(modelData) == "table" then
+		if modelData.corrupt == true or modelData.isCorrupt == true then
+			return true
+		end
+		for _, key in ipairs({ "shiny", "gleam", "particle", "gl", "gleaming" }) do
+			if _G.F.isCorruptGleamValue(_G.F.safeTableGet(modelData, key)) then
+				return true
+			end
+		end
+	end
+
+	local sprite = _G.F.safeTableGet(monster, "sprite")
+	local spriteModelData = type(sprite) == "table" and _G.F.safeTableGet(sprite, "modelData") or nil
+	if type(spriteModelData) == "table" then
+		if spriteModelData.corrupt == true or spriteModelData.isCorrupt == true then
+			return true
+		end
+		for _, key in ipairs({ "shiny", "gleam", "particle", "gl", "gleaming" }) do
+			if _G.F.isCorruptGleamValue(_G.F.safeTableGet(spriteModelData, key)) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+_G.F.isCorruptWildFoe = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" or battle.ended == true then
+		return false
+	end
+
+	if not _G.F.hasWildFoeLoaded(battle) then
+		return false
+	end
+
+	local foe = _G.F.getBattleFoeMonster(battle)
+	if _G.F.isCorruptMonster(foe) then
+		return true
+	end
+
+	local p2 = battle.p2
+	local active = type(p2) == "table" and p2.active or nil
+	if type(active) == "table" then
+		for index = 1, #active do
+			if _G.F.isCorruptMonster(_G.F.safeTableGet(active, index)) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+-- Active slots can contain the game's null sentinel; direct field access throws.
+_G.F.isValidBattleMonster = function(monster)
+	if type(monster) ~= "table" then
+		return false
+	end
+
+	if type(_G.F.safeTableGet(monster, "sprite")) == "table" then
+		return true
+	end
+
+	local name = _G.F.safeTableGet(monster, "name")
+	if type(name) == "string" and name ~= "" then
+		return true
+	end
+
+	local species = _G.F.safeTableGet(monster, "species")
+	return type(species) == "string" and species ~= ""
+end
+
+_G.F.getBattlePlayerActiveMonster = function(battle)
+	if type(battle) ~= "table" or type(battle.p1) ~= "table" then
+		return nil
+	end
+
+	local active = _G.F.safeTableGet(battle.p1, "active")
+	if type(active) == "table" then
+		for index = 1, #active do
+			local monster = _G.F.safeTableGet(active, index)
+			if _G.F.isValidBattleMonster(monster) then
+				return monster
+			end
+		end
+
+		for _, monster in pairs(active) do
+			if _G.F.isValidBattleMonster(monster) then
+				return monster
+			end
+		end
+	end
+
+	local monsters = _G.F.safeTableGet(battle.p1, "monsters")
+	if type(monsters) == "table" then
+		for index = 1, #monsters do
+			local monster = _G.F.safeTableGet(monsters, index)
+			if _G.F.isValidBattleMonster(monster) then
+				return monster
+			end
+		end
+
+		if _G.F.isValidBattleMonster(_G.F.safeTableGet(monsters, 1)) then
+			return _G.F.safeTableGet(monsters, 1)
+		end
+	end
+
+	return nil
+end
+
+_G.F.getMonsterBattleModel = function(sprite)
+	if type(sprite) ~= "table" then
+		return nil
+	end
+
+	local getModel = _G.F.safeTableGet(sprite, "getModel")
+	if type(getModel) == "function" then
+		local ok, model = pcall(function()
+			return getModel(sprite)
+		end)
+
+		if ok and typeof(model) == "Instance" then
+			return model
+		end
+	end
+
+	local owm = _G.F.safeTableGet(sprite, "owm")
+	if type(owm) == "table" then
+		local model = _G.F.safeTableGet(owm, "Model")
+		if typeof(model) == "Instance" then
+			return model
+		end
+	end
+
+	local model = _G.F.safeTableGet(sprite, "Model")
+	if typeof(model) == "Instance" then
+		return model
+	end
+
+	return nil
+end
+
+_G.F.isModelInBattleScene = function(model, scene)
+	if typeof(model) ~= "Instance" or scene == nil then
+		return false
+	end
+
+	if typeof(scene) == "Instance" then
+		local current = model
+		while current do
+			if current == scene then
+				return true
+			end
+			current = current.Parent
+		end
+
+		return false
+	end
+
+	if type(scene) == "table" and typeof(scene.model) == "Instance" then
+		return _G.F.isModelInBattleScene(model, scene.model)
+	end
+
+	return false
+end
+
+_G.F.isPlayerLoomianOnField = function(battle)
+	if type(battle) ~= "table" then
+		return false
+	end
+
+	local ok, onField = pcall(function()
+		local monster = _G.F.getBattlePlayerActiveMonster(battle)
+		if not _G.F.isValidBattleMonster(monster) then
+			return false
+		end
+
+		local sprite = _G.F.safeTableGet(monster, "sprite")
+		if type(sprite) ~= "table" then
+			return false
+		end
+
+		local model = _G.F.getMonsterBattleModel(sprite)
+		if not model then
+			return false
+		end
+
+		return _G.F.isModelInBattleScene(model, battle.scene)
+	end)
+
+	return ok and onField == true
+end
+
+_G.F.isBattleDialogueActive = function()
+	if type(_G._p) ~= "table" or type(_G._p.NPCChat) ~= "table" then
+		return false
+	end
+
+	local chat = _G._p.NPCChat
+
+	if type(chat.isChatting) == "function" then
+		local ok, chatting = pcall(function()
+			return chat:isChatting()
+		end)
+
+		if ok and chatting == true then
+			return true
+		end
+	end
+
+	local chatBox = chat.chatBox
+	if typeof(chatBox) == "Instance" and chatBox.Parent ~= nil then
+		return true
+	end
+
+	return false
+end
+-- Auto Catch uses this instead of getWildSpecialFoeForStop so gleaming/gamma/wisp
+-- are caught even when the "Stop on Gleaming" toggles are disabled.
+_G.F.getWildSpecialFoeForCatch = function(battle)
+	local foe = _G.F.getBattleFoeMonster(battle)
+	if type(foe) ~= "table" then
+		return nil
+	end
+
+	local wispValue = _G.F.getMonsterWispValue(foe)
+	if _G.isActiveFlag(wispValue) then
+		return foe, wispValue, "Wisp"
+	end
+
+	local gammaValue = _G.F.getMonsterGammaValue(foe)
+	if _G.isActiveFlag(gammaValue) then
+		return foe, gammaValue, "Gamma"
+	end
+
+	local gleamValue = _G.F.getMonsterGleamingOnlyValue(foe)
+	if _G.isActiveFlag(gleamValue) then
+		return foe, gleamValue, "Gleaming"
+	end
+
+	return nil
+end
+
+-- True for gleaming/gamma/wisp/roamer/target wild foes. Used to block auto-run.
+_G.F.isSpecialWildFoe = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" then
+		return false
+	end
+
+	if not _G.F.hasWildFoeLoaded(battle) then
+		return false
+	end
+
+	if _G.F.isMatchingEncounterTargetFoe(battle) then
+		return true
+	end
+
+	if _G.F.isMatchingRoamingLegendaryFoe(battle) then
+		return true
+	end
+
+	return _G.F.getWildSpecialFoeForCatch(battle) ~= nil
+end
+
+_G.F.isNormalWildEncounter = function(battle)
+	if type(battle) ~= "table" or battle.kind ~= "wild" or battle.ended == true then
+		return false
+	end
+
+	if not _G.F.hasWildFoeLoaded(battle) then
+		return false
+	end
+
+	return not _G.F.isSpecialWildFoe(battle)
+end
+
+
+_G.F.getStaticHuntSpecialFoe = function(battle)
+	local foe = battle and battle.p2 and battle.p2.monsters and battle.p2.monsters[1]
+	if type(foe) ~= "table" then
+		return nil
+	end
+
+	local gleamValue = _G.F.getMonsterGleamValue(foe)
+	if _G.isActiveFlag(gleamValue) then
+		return foe, gleamValue, "Gleaming/Gamma"
+	end
+
+	local wispValue = _G.F.getMonsterWispValue(foe)
+	if _G.isActiveFlag(wispValue) then
+		return foe, wispValue, "Wisp"
+	end
+
+	return nil
+end
+
+_G.F.hasWildFoeLoaded = function(battle)
+	return type(battle) == "table"
+		and type(battle.p2) == "table"
+		and type(battle.p2.monsters) == "table"
+		and type(battle.p2.monsters[1]) == "table"
+end
+
+_G.F.isStaticBattleReadyToEnd = function(battle)
+	if type(battle) ~= "table" or battle.ended then
+		return false
+	end
+
+	if battle.setupComplete ~= true then
+		return false
+	end
+
+	return _G.F.hasWildFoeLoaded(battle)
+end
+
+-- True once intro dialogue, send-out animation, and the action menu are ready.
+_G.F.isBattleIntroComplete = function(battle)
+	if type(battle) ~= "table" or battle.ended then
+		return false
+	end
+
+	if not _G.F.isStaticBattleReadyToEnd(battle) then
+		return false
+	end
+
+	if battle.focusSceneIsControllingCamera == true then
+		return false
+	end
+
+	-- Wild battles set this until the first switch-in / send-out finishes.
+	if battle.pauseAfterSwitchFlag == true then
+		return false
+	end
+
+	if battle.kind == "wild" then
+		if _G.F.isBattleDialogueActive() then
+			return false
+		end
+	end
+
+	return battle.state == "input"
+		or battle.readyForActions == true
+		or _G.F.isBattleMainMenuOpen()
+end
+
+_G.F.isBattleReadyForServerRun = function(battle)
+	if not _G.F.isStaticBattleReadyToEnd(battle) then
+		return false
+	end
+
+	if battle.pauseAfterSwitchFlag == true or _G.F.isBattleDialogueActive() then
+		return false
+	end
+
+	if battle.readyForActions == true or battle.state == "input" then
+		return true
+	end
+
+	return _G.F.isBattleMainMenuOpen()
+end
+
+_G.F.waitForBattleReadyForRun = function(battle, timeout)
+	if type(battle) ~= "table" or battle.ended then
+		return false
+	end
+
+	timeout = tonumber(timeout) or 12
+	local startAt = os.clock()
+
+	while os.clock() - startAt < timeout do
+		if battle.ended then
+			return false
+		end
+
+		if battle.setupComplete == true
+			and battle.pauseAfterSwitchFlag ~= true
+			and not _G.F.isBattleDialogueActive()
+			and _G.F.hasWildFoeLoaded(battle)
+			and (battle.readyForActions == true or battle.state == "input") then
+			return true
+		end
+
+		if _G.F.isPityTrackingActive() and _G.autoEncounterEnabled then
+			_G.F.clearEncounterFastForward(battle)
+		end
+
+		task.wait(0.05)
+	end
+
+	return _G.F.isBattleReadyForServerRun(battle)
+end
+
+_G.F.isBattleReadyForAutoRun = function(battle)
+	if not _G.F.isNormalWildEncounter(battle) then
+		return false
+	end
+
+	return _G.F.isBattleReadyForServerRun(battle)
+end
+_G.F.isBattleMoveMenuOpen = function()
+	local battleGui = _G.F.getBattleGuiModule()
+	if not battleGui then
+		return false
+	end
+
+	local contexts = _G.F.safeTableGet(battleGui, "currentMenuContexts")
+	if type(contexts) == "table" then
+		for _, contextName in ipairs(contexts) do
+			if contextName == "fight" then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+_G.F.tryBattleGuiMainButton = function(buttonIndex)
+	local battleGui = _G.F.getBattleGuiModule()
+	if type(battleGui) ~= "table" or type(battleGui.mainButtonClicked) ~= "function" then
+		return false
+	end
+
+	local ok = pcall(function()
+		battleGui:mainButtonClicked(_G.F.getBattleRunInputStub(), buttonIndex)
+	end)
+
+	return ok
+end
+
+_G.F.getBattleRunInputStub = function()
+	return {
+		UserInputType = Enum.UserInputType.MouseButton1,
+		KeyCode = Enum.KeyCode.Unknown,
+	}
+end
+
+_G.battleMoveLastRequest = {}
+_G.battleMovePendingRequest = {}
+_G.battleMovePendingAt = {}
+
+_G.F.useBattleMoveSlot = function(slot, battle, options)
+	options = options or {}
+	slot = math.clamp(math.floor(tonumber(slot) or 1), 1, 4)
+	battle = battle or _G.F.getCurrentBattle()
+
+	if not options.force and not _G.autoMoveOneEnabled then
+		_G.battleMoveLastRequest.default = nil
+		_G.battleMovePendingRequest.default = nil
+		_G.battleMovePendingAt.default = 0
+		return false, "Auto Use Move is disabled."
+	end
+
+	if type(battle) ~= "table" then
+		return false, "No active battle."
+	end
+
+	if battle.done or battle.ended then
+		return false, "Battle already ended."
+	end
+
+	local mainMenuOpen = options.allowFight ~= false and _G.F.isBattleMainMenuOpen()
+	local moveMenuOpen = options.allowFight ~= false and _G.F.isBattleMoveMenuOpen()
+	local inputReady = battle.state == "input"
+		or battle.readyForActions == true
+		or mainMenuOpen
+		or moveMenuOpen
+
+	if not inputReady then
+		return false, "Battle is not ready for input."
+	end
+
+	local trackingKey = options.trackingKey or (options.force and "corrupt" or "default")
+	local request = battle.fulfillingRequest
+	local moveChoice = "move " .. tostring(slot)
+
+	if battle.state == "input" and type(request) == "table" and request.requestType == "move" then
+		local requestToken = tostring(request) .. "|" .. moveChoice
+		if _G.battleMoveLastRequest[trackingKey] == requestToken then
+			return false, "Move already sent for this request."
+		end
+
+		if _G.battleMovePendingRequest[trackingKey] ~= request then
+			_G.battleMovePendingRequest[trackingKey] = request
+			_G.battleMovePendingAt[trackingKey] = os.clock()
+			return false, "Move queued."
+		end
+
+		if os.clock() - (_G.battleMovePendingAt[trackingKey] or 0) < 0.35 then
+			return false, "Waiting for move input listener."
+		end
+
+		if type(battle.InputChosen) ~= "table" or type(battle.InputChosen.Fire) ~= "function" then
+			return false, "Move input hook is not ready."
+		end
+
+		local ok, result = pcall(function()
+			battle.InputChosen:Fire(moveChoice)
+		end)
+
+		if not ok then
+			return false, tostring(result)
+		end
+
+		_G.battleMoveLastRequest[trackingKey] = requestToken
+		_G.battleMovePendingRequest[trackingKey] = nil
+		return true
+	end
+
+	if mainMenuOpen then
+		if _G.F.tryBattleGuiMainButton(1) then
+			return false, "Fight opened."
+		end
+	end
+
+	if moveMenuOpen then
+		if _G.F.tryBattleGuiMainButton(slot) then
+			return false, "Move selected."
+		end
+	end
+
+	return false, "No move request is active."
+end
+
+_G.F.useCorruptBattleMoveOne = function(battle)
+	if not _G.F.isCorruptWildFoe(battle) then
+		return false, "Not a corrupt wild encounter."
+	end
+
+	-- Prefer the configured auto-move slot, but always force move 1 for corrupt
+	-- encounters so Auto Run can finish them without enabling Auto Use Move.
+	return _G.F.useBattleMoveSlot(1, battle, {
+		force = true,
+		allowFight = true,
+		trackingKey = "corrupt",
+	})
+end
+_G.battleRunEarliestAt = {}
+_G.battleIntroCompletedAt = {}
+_G.battleAutoRunTiming = setmetatable({}, { __mode = "k" })
+
+_G.F.isAutoRunMenuSettled = function(battle)
+	if type(battle) ~= "table" or battle.ended then
+		return false
+	end
+
+	if not _G.F.isBattleIntroComplete(battle) then
+		return false
+	end
+
+	if battle.kind == "wild" and not _G.F.isPlayerLoomianOnField(battle) then
+		return false
+	end
+
+	return _G.F.isBattleMainMenuOpen() or battle.state == "input"
+end
+
+_G.F.trackBattleAutoRunDelay = function(battle)
+	if type(battle) ~= "table" or battle.ended then
+		return nil
+	end
+
+	local timing = _G.battleAutoRunTiming[battle]
+	if not timing then
+		timing = {}
+		_G.battleAutoRunTiming[battle] = timing
+	end
+
+	if _G.F.isAutoRunMenuSettled(battle) then
+		if type(timing.menuReadyAt) ~= "number" then
+			timing.menuReadyAt = os.clock()
+		end
+		return timing.menuReadyAt
+	end
+
+	timing.menuReadyAt = nil
+	return nil
+end
+
+_G.F.isAutoRunDelaySatisfied = function(menuReadyAt)
+	if type(menuReadyAt) ~= "number" then
+		return false
+	end
+
+	local required = math.max(1, tonumber(_G.encounterRunDelay) or 2.5)
+	return (os.clock() - menuReadyAt) >= required
+end
+
+_G.F.clearBattleAutoRunTiming = function(battle)
+	if type(battle) == "table" then
+		_G.battleAutoRunTiming[battle] = nil
+	end
+end
+
+_G.F.getBattleRunEarliestAt = function(battle)
+	local battleId = battle and battle.battleId
+	if not battleId then
+		return os.clock()
+	end
+
+	if (_G.autoRunEnabled or _G.autoEncounterEnabled) and _G.battleRunEarliestAt[battleId] then
+		return _G.battleRunEarliestAt[battleId]
+	end
+
+	if not _G.battleRunEarliestAt[battleId] then
+		_G.battleRunEarliestAt[battleId] = os.clock() + 0.65
+	end
+
+	return _G.battleRunEarliestAt[battleId]
+end
+
+_G.F.clearBattleRunTiming = function(battle)
+	local battleId = battle and battle.battleId
+	if battleId then
+		_G.battleRunEarliestAt[battleId] = nil
+		_G.battleIntroCompletedAt[battleId] = nil
+	end
+
+	_G.F.clearBattleAutoRunTiming(battle)
+end
+
+_G.F.canFleeAfterAutoRunDelay = function(battle, menuReadyAt)
+	if not _G.F.isAutoRunMenuSettled(battle) then
+		return false
+	end
+
+	if not _G.F.isAutoRunDelaySatisfied(menuReadyAt) then
+		return false
+	end
+
+	return _G.F.isBattleMainMenuOpen() or battle.state == "input"
+end
+
+_G.F.canAutoRunFromBattle = function(battle, menuReadyAt)
+	if not _G.F.shouldAutoRunFromBattle(battle) then
+		return false
+	end
+
+	return _G.F.canFleeAfterAutoRunDelay(battle, menuReadyAt)
+end
+
+_G.F.assertAutoRunDelayBeforeFlee = function(battle)
+	if not (_G.autoRunEnabled or _G.autoEncounterEnabled) then
+		return true
+	end
+
+	if type(battle) ~= "table" or battle.kind ~= "wild" then
+		return true
+	end
+
+	local menuReadyAt = _G.F.trackBattleAutoRunDelay(battle)
+	return _G.F.canFleeAfterAutoRunDelay(battle, menuReadyAt)
+end
+_G.F.getEncounterReleaseDelay = function()
+	if _G.autoEncounterEnabled then
+		return math.max(_G.encounterReleaseDelay or 1.75, 2)
+	end
+
+	return _G.encounterReleaseDelay or 1.75
+end
+
+
+
 _G.F.isStaticBattleReadyToEnd = function(battle)
 	if type(battle) ~= "table" or battle.ended then
 		return false
@@ -1278,30 +2178,16 @@ _G.F.isBattleMainMenuOpen = function()
 	return _G.F.findBattleRunButtonInGui() ~= nil
 end
 
-_G.battleRunEarliestAt = {}
-
-_G.F.getBattleRunEarliestAt = function(battle)
-	local battleId = battle and battle.battleId
-	if not battleId then
-		return os.clock()
-	end
-
-	if not _G.battleRunEarliestAt[battleId] then
-		_G.battleRunEarliestAt[battleId] = os.clock() + 0.65
-	end
-
-	return _G.battleRunEarliestAt[battleId]
-end
-
-_G.F.clearBattleRunTiming = function(battle)
-	local battleId = battle and battle.battleId
-	if battleId then
-		_G.battleRunEarliestAt[battleId] = nil
-	end
-end
+_G.battleRunEarliestAt = _G.battleRunEarliestAt or {}
+_G.battleIntroCompletedAt = _G.battleIntroCompletedAt or {}
+_G.battleAutoRunTiming = _G.battleAutoRunTiming or setmetatable({}, { __mode = "k" })
 
 _G.F.isBattleRunMenuReady = function(battle, allowTimedFallback)
 	if not _G.F.isStaticBattleReadyToEnd(battle) then
+		return false
+	end
+
+	if type(_G.F.isBattleIntroComplete) == "function" and not _G.F.isBattleIntroComplete(battle) then
 		return false
 	end
 
@@ -1310,21 +2196,26 @@ _G.F.isBattleRunMenuReady = function(battle, allowTimedFallback)
 		return false
 	end
 
-	-- Never try to run before the battle is awaiting input AND the
-	-- BattleGui has taken the battle over. setupComplete flips before the
-	-- camera pan / GUI load, and the previous battle's menu state can still
-	-- read as "open" during the intro ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â running that early corrupts the
-	-- battle client. (For fishing this also makes takeOver's mainChoices
-	-- run before tryRun ends the battle.)
-	if battle.state ~= "input" or not _G.F.isBattleLinkedToBattleGui(battle) then
-		return false
+	-- Prefer linked BattleGui + input state so early Run clicks cannot corrupt
+	-- the client (especially fishing takeOver / mainChoices races).
+	if battle.state == "input" and _G.F.isBattleLinkedToBattleGui(battle) then
+		if _G.F.isBattleMainMenuOpen() then
+			return true
+		end
+		return true
 	end
 
 	if _G.F.isBattleMainMenuOpen() then
 		return true
 	end
 
-	if allowTimedFallback then
+	if battle.state == "input" then
+		return true
+	end
+
+	if allowTimedFallback
+		and not _G.F.isEncounterAutomationActive()
+		and not _G.autoRunEnabled then
 		return os.clock() >= earliestAt + 0.6
 	end
 
@@ -1376,12 +2267,19 @@ _G.F.isBattleLinkedToBattleGui = function(battle)
 	return linkedBattle == battle
 end
 
-_G.F.naturalRunFromBattle = function(battle, allowTimedFallback)
+_G.F.naturalRunFromBattle = function(battle, allowTimedFallback, serverOnly)
 	if type(battle) ~= "table" or battle.CanRun == false or battle.ended then
 		return false
 	end
 
-	if not _G.F.isBattleRunMenuReady(battle, allowTimedFallback) then
+	if (_G.autoEncounterEnabled or _G.autoRunEnabled)
+		and battle.kind == "wild"
+		and type(_G.F.isNormalWildEncounter) == "function"
+		and not _G.F.isNormalWildEncounter(battle) then
+		return false
+	end
+
+	if type(_G.F.isCorruptWildFoe) == "function" and _G.F.isCorruptWildFoe(battle) then
 		return false
 	end
 
@@ -1389,19 +2287,50 @@ _G.F.naturalRunFromBattle = function(battle, allowTimedFallback)
 		_G._p = _G.F.findP()
 	end
 
+	local pityTracking = type(_G.F.isPityTrackingActive) == "function" and _G.F.isPityTrackingActive()
+	if pityTracking then
+		if _G.autoEncounterEnabled and type(_G.F.clearEncounterFastForward) == "function" then
+			_G.F.clearEncounterFastForward(battle)
+		end
+		if type(_G.F.waitForBattleReadyForRun) == "function" and not _G.F.waitForBattleReadyForRun(battle, 12) then
+			return false
+		end
+		serverOnly = true
+	end
+
+	if (_G.autoRunEnabled or _G.autoEncounterEnabled)
+		and type(_G.F.assertAutoRunDelayBeforeFlee) == "function"
+		and not _G.F.assertAutoRunDelayBeforeFlee(battle) then
+		return false
+	end
+
+	if not _G.F.isBattleRunMenuReady(battle, allowTimedFallback) then
+		return false
+	end
+
+	local pitySnapshot = nil
+	if pityTracking and type(_G.F.copyPityState) == "function" then
+		_G.F.refreshPityState(true)
+		pitySnapshot = _G.F.copyPityState(_G.pityState)
+	end
+
+	if _G.autoEncounterEnabled and type(_G.F.clearEncounterFastForward) == "function" then
+		_G.F.clearEncounterFastForward(battle)
+	end
+
 	local isFishingBattle = battle.fshPct ~= nil
 
-	-- Fishing: skip BattleGui run clicks; they call mainChoices before Battle.currentBattle is set.
-	if not isFishingBattle then
+	if not serverOnly and not isFishingBattle then
 		local canClickBattleGui = _G.F.isBattleLinkedToBattleGui(battle)
 		local runButton = _G.F.getBattleRunButton()
 
-		-- Prefer clicking Run with the real mouse; fall back to the
-		-- module/virtual paths only when that isn't possible.
-		if canClickBattleGui and runButton and _G.F.realMouseClickGuiObject(runButton) then
+		if canClickBattleGui and runButton and type(_G.F.realMouseClickGuiObject) == "function" and _G.F.realMouseClickGuiObject(runButton) then
 			task.wait(0.2)
-
 			if battle.ended then
+				if pitySnapshot then
+					_G.encounterPitySettling = true
+					_G.lastEncounterPitySnapshot = pitySnapshot
+				end
 				return true
 			end
 		end
@@ -1413,22 +2342,31 @@ _G.F.naturalRunFromBattle = function(battle, allowTimedFallback)
 			pcall(function()
 				mainButtonClicked(battleGui, {}, 4)
 			end)
-
 			if battle.ended then
+				if pitySnapshot then
+					_G.encounterPitySettling = true
+					_G.lastEncounterPitySnapshot = pitySnapshot
+				end
 				return true
 			end
 		end
 
 		if runButton and canClickBattleGui then
 			_G.F.clickGuiButtonOnce(runButton)
-
 			if battle.ended then
+				if pitySnapshot then
+					_G.encounterPitySettling = true
+					_G.lastEncounterPitySnapshot = pitySnapshot
+				end
 				return true
 			end
 
 			_G.F.activateGuiButton(runButton)
-
 			if battle.ended then
+				if pitySnapshot then
+					_G.encounterPitySettling = true
+					_G.lastEncounterPitySnapshot = pitySnapshot
+				end
 				return true
 			end
 		end
@@ -1448,7 +2386,29 @@ _G.F.naturalRunFromBattle = function(battle, allowTimedFallback)
 		return false
 	end
 
-	return _G.F.finishNaturalBattleRun(battle, escaped, masteryUpdate, queueActions)
+	local finished = _G.F.finishNaturalBattleRun(battle, escaped, masteryUpdate, queueActions)
+
+	if not finished and serverOnly then
+		return _G.F.naturalRunFromBattle(battle, allowTimedFallback, false)
+	end
+
+	if finished then
+		if pitySnapshot then
+			_G.encounterPitySettling = true
+			_G.lastEncounterPitySnapshot = pitySnapshot
+		elseif (_G.autoEncounterEnabled or _G.autoRunEnabled) and type(_G.F.refreshPityState) == "function" then
+			_G.F.refreshPityState()
+		end
+
+		if type(_G.F.releaseFinishedBattle) == "function" then
+			_G.F.releaseFinishedBattle(battle)
+		end
+		if type(_G.F.clearCurrentBattleReference) == "function" then
+			_G.F.clearCurrentBattleReference(battle)
+		end
+	end
+
+	return finished
 end
 _G.naturalCatchFromBattle = nil
 _G.normalizeCaptureDiscId = nil
