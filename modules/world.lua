@@ -1567,15 +1567,19 @@ _G.LOCAL_AVATAR_USER_ID_POOL = {
 }
 
 -- Fallback R15 locomotion when a description has no custom pack set.
-	_G.LOCAL_AVATAR_DEFAULT_ANIMS = {
+-- These are playable KeyframeSequence / Animation content IDs (not catalog items).
+_G.LOCAL_AVATAR_DEFAULT_ANIMS = {
 	idle = 507766388,
 	walk = 507777826,
 	run = 507767968,
 	jump = 507765000,
-	fall = 507767968, -- R15 default Animate uses this id for fall
+	fall = 507767968,
 	climb = 507765644,
 	swim = 913384386,
 }
+
+-- Cache: catalog animation asset id -> playable rbxassetid://...
+_G.localAvatarAnimIdCache = _G.localAvatarAnimIdCache or {}
 
 _G.F.pickLocalAvatarUserId = function(preferred)
 	local preferredId = tonumber(preferred)
@@ -1591,22 +1595,132 @@ _G.F.pickLocalAvatarUserId = function(preferred)
 	return pool[math.random(1, #pool)]
 end
 
-_G.F.resolveLocalAvatarAnimAsset = function(value, fallback)
+-- HumanoidDescription stores CATALOG animation item ids (e.g. Rthro Run 2510238627),
+-- not playable AnimationIds. Resolve via InsertService/GetObjects when needed.
+_G.F.extractPlayableAnimIdFromInstance = function(root)
+	if not root then
+		return nil
+	end
+
+	local best = nil
+	local function consider(animId)
+		if type(animId) ~= "string" or animId == "" or animId == "0" or animId == "rbxassetid://0" then
+			return
+		end
+		if string.find(animId, "rbxassetid://0", 1, true) then
+			return
+		end
+		best = animId
+	end
+
+	if root:IsA("Animation") then
+		consider(root.AnimationId)
+	end
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Animation") then
+			consider(descendant.AnimationId)
+			if best then
+				break
+			end
+		end
+	end
+	return best
+end
+
+_G.F.loadCatalogAnimationAsset = function(assetId)
+	assetId = tonumber(assetId)
+	if not assetId or assetId <= 0 then
+		return nil
+	end
+
+	local cache = _G.localAvatarAnimIdCache
+	if cache[assetId] then
+		return cache[assetId]
+	end
+
+	local playable = nil
+
+	-- Prefer InsertService for catalog Animation items (Idle/Walk/Run/...).
+	pcall(function()
+		local InsertService = game:GetService("InsertService")
+		local container = InsertService:LoadAsset(assetId)
+		if container then
+			playable = _G.F.extractPlayableAnimIdFromInstance(container)
+			pcall(function()
+				container:Destroy()
+			end)
+		end
+	end)
+
+	-- Executor fallback: GetObjects often works when InsertService is restricted.
+	if not playable then
+		pcall(function()
+			local getObjects = game.GetObjects
+			if type(getObjects) == "function" then
+				local objects = getObjects(game, "rbxassetid://" .. tostring(assetId))
+				if type(objects) == "table" then
+					for _, object in ipairs(objects) do
+						playable = _G.F.extractPlayableAnimIdFromInstance(object)
+						pcall(function()
+							object:Destroy()
+						end)
+						if playable then
+							break
+						end
+					end
+				end
+			end
+		end)
+	end
+
+	-- Last resort: treat the number itself as a content id (works for default R15 ids).
+	if not playable then
+		playable = "rbxassetid://" .. tostring(assetId)
+	end
+
+	cache[assetId] = playable
+	return playable
+end
+
+_G.F.normalizeAnimIdString = function(value)
+	if type(value) ~= "string" or value == "" or value == "0" then
+		return nil
+	end
+	if value == "rbxassetid://0" or value == "http://www.roblox.com/asset/?id=0" then
+		return nil
+	end
+	-- Already a content URL from Animate / Animation instances.
+	if string.find(value, "rbxassetid://", 1, true)
+		or string.find(value, "http://www.roblox.com/asset/?id=", 1, true)
+		or string.find(value, "https://www.roblox.com/asset/?id=", 1, true)
+		or string.find(value, "rbxhttp://", 1, true) then
+		return value
+	end
 	local numeric = tonumber(value)
 	if numeric and numeric > 0 then
-		return "rbxassetid://" .. tostring(numeric)
+		return _G.F.loadCatalogAnimationAsset(numeric)
 	end
-	if type(value) == "string" and value ~= "" and value ~= "0" then
-		if string.find(value, "rbxassetid://", 1, true) then
-			return value
-		end
-		numeric = tonumber(value)
-		if numeric and numeric > 0 then
-			return "rbxassetid://" .. tostring(numeric)
+	return nil
+end
+
+_G.F.resolveLocalAvatarAnimAsset = function(value, fallback)
+	-- Animate StringValue / AnimationId strings first.
+	if type(value) == "string" then
+		local normalized = _G.F.normalizeAnimIdString(value)
+		if normalized then
+			return normalized
 		end
 	end
-	if fallback and tonumber(fallback) and tonumber(fallback) > 0 then
-		return "rbxassetid://" .. tostring(fallback)
+
+	local numeric = tonumber(value)
+	if numeric and numeric > 0 then
+		return _G.F.loadCatalogAnimationAsset(numeric)
+	end
+
+	local fallbackId = tonumber(fallback)
+	if fallbackId and fallbackId > 0 then
+		-- Defaults are already playable content ids.
+		return "rbxassetid://" .. tostring(fallbackId)
 	end
 	return nil
 end
@@ -1618,7 +1732,7 @@ _G.F.stopLocalAvatarAnimations = function()
 		return
 	end
 
-	for name, track in pairs(controller.tracks or {}) do
+	for _, track in pairs(controller.tracks or {}) do
 		pcall(function()
 			if track and track.IsPlaying then
 				track:Stop(0)
@@ -1668,7 +1782,6 @@ _G.F.collectAnimateScriptAnimIds = function(fakeModel)
 					break
 				end
 			end
-			-- Also accept a direct StringValue under Animate named like "walk".
 			if not bestId and folder:IsA("StringValue") and folder.Value ~= "" then
 				bestId = folder.Value
 			end
@@ -1692,7 +1805,6 @@ _G.F.buildLocalAvatarAnimationController = function(fakeHumanoid, description, f
 		animator.Parent = fakeHumanoid
 	end
 
-	-- Stop any default tracks CreateHumanoidModelFromDescription may have started.
 	pcall(function()
 		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
 			track:Stop(0)
@@ -1712,16 +1824,21 @@ _G.F.buildLocalAvatarAnimationController = function(fakeHumanoid, description, f
 	}
 
 	local tracks = {}
+	local preload = {}
 	for name, info in pairs(mapping) do
 		local prop, fallback, priority, looped = info[1], info[2], info[3], info[4]
-		local descValue = description and description[prop] or nil
-		-- Prefer Animate pack entries (what players actually equip), then description, then defaults.
+		local descValue = nil
+		pcall(function()
+			descValue = description and description[prop] or nil
+		end)
+		-- Prefer Animate (usually already resolved), then description catalog ids, then defaults.
 		local asset = _G.F.resolveLocalAvatarAnimAsset(fromAnimate[name], nil)
 			or _G.F.resolveLocalAvatarAnimAsset(descValue, fallback)
 		if asset then
 			local animation = Instance.new("Animation")
 			animation.Name = "LLSPLOIT_" .. name
 			animation.AnimationId = asset
+			table.insert(preload, animation)
 			local ok, track = pcall(function()
 				return animator:LoadAnimation(animation)
 			end)
@@ -1734,6 +1851,10 @@ _G.F.buildLocalAvatarAnimationController = function(fakeHumanoid, description, f
 			end
 		end
 	end
+
+	pcall(function()
+		game:GetService("ContentProvider"):PreloadAsync(preload)
+	end)
 
 	return {
 		tracks = tracks,
@@ -1949,9 +2070,18 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 				descendant.CanTouch = false
 				descendant.CanQuery = false
 				descendant.Massless = true
-				descendant.Anchored = false
+				-- Only the root stays anchored; limbs must stay free for Motor6D packs.
+				descendant.Anchored = (descendant.Name == "HumanoidRootPart")
 			end)
 		end
+	end
+
+	local fakeRoot = fake:FindFirstChild("HumanoidRootPart") or fake.PrimaryPart
+	if fakeRoot then
+		pcall(function()
+			fake.PrimaryPart = fakeRoot
+			fakeRoot.Anchored = true
+		end)
 	end
 
 	if fakeHumanoid then
@@ -1962,12 +2092,19 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			fakeHumanoid.WalkSpeed = 0
 			fakeHumanoid.JumpPower = 0
 			fakeHumanoid.JumpHeight = 0
+			fakeHumanoid.PlatformStand = true
 		end)
 	end
 
 	fake.Name = "LLSPLOIT_LocalAvatar"
-	local camera = workspace.CurrentCamera
-	fake.Parent = (camera and camera.Parent) and camera or workspace
+	-- Keep under Workspace (not Camera) so Animator reliably drives Motor6Ds.
+	local folder = workspace:FindFirstChild("LLSPLOIT_LocalAvatars")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "LLSPLOIT_LocalAvatars"
+		folder.Parent = workspace
+	end
+	fake.Parent = folder
 
 	_G.localAvatarState.fake = fake
 	_G.localAvatarState.animController = animController
@@ -2007,9 +2144,17 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 		if not realRoot then
 			return
 		end
-		pcall(function()
-			fake:PivotTo(realRoot.CFrame)
-		end)
+		-- Move only the root; preserve Motor6D animated limb offsets.
+		local rootPart = fake:FindFirstChild("HumanoidRootPart") or fake.PrimaryPart
+		if rootPart then
+			pcall(function()
+				rootPart.CFrame = realRoot.CFrame
+			end)
+		else
+			pcall(function()
+				fake:PivotTo(realRoot.CFrame)
+			end)
+		end
 		local realHum = character:FindFirstChildOfClass("Humanoid")
 		local fakeHum = fake:FindFirstChildOfClass("Humanoid")
 		if realHum and fakeHum then
