@@ -1536,9 +1536,11 @@ _G.F.openDeveloperConsole = function()
 	return true
 end
 
--- Client-side avatar morph: ApplyDescription is server-only, so we build a
--- description model locally, strip the live character's cosmetics, then copy
--- clothing / accessories / face / scales / Animate pack IDs onto it.
+-- Client-side avatar morph.
+-- Never calls Humanoid:ApplyDescription / ApplyDescriptionReset (server-only)
+-- and never calls CreateHumanoidModelFromDescription (can hit the same backend
+-- restriction). Loads catalog assets via InsertService / GetObjects and parents
+-- them onto the live character, then patches Animate pack ids.
 _G.localAvatarState = _G.localAvatarState or {
 	characterConn = nil,
 	originalDescription = nil,
@@ -1563,6 +1565,8 @@ _G.LOCAL_AVATAR_USER_ID_POOL = {
 	1231234,
 	27636987,
 }
+
+_G.localAvatarAnimIdCache = _G.localAvatarAnimIdCache or {}
 
 _G.F.pickLocalAvatarUserId = function(preferred)
 	local preferredId = tonumber(preferred)
@@ -1606,10 +1610,7 @@ _G.F.clearCharacterCosmetics = function(character)
 			or child:IsA("Pants")
 			or child:IsA("ShirtGraphic")
 			or child:IsA("BodyColors")
-			or child:IsA("CharacterMesh")
-			or child:IsA("BodyPartDescription")
-			or child.Name == "Shirt"
-			or child.Name == "Pants" then
+			or child:IsA("CharacterMesh") then
 			pcall(function()
 				child:Destroy()
 			end)
@@ -1645,14 +1646,312 @@ _G.F.applyHumanoidScalesFromDescription = function(humanoid, description)
 	end
 end
 
-_G.F.copyHeadFaceFromModel = function(sourceModel, targetCharacter)
-	local srcHead = sourceModel and sourceModel:FindFirstChild("Head")
-	local dstHead = targetCharacter and targetCharacter:FindFirstChild("Head")
-	if not srcHead or not dstHead then
+_G.F.applyBodyColorsFromDescription = function(character, description)
+	if not character or not description then
 		return
 	end
 
-	for _, child in ipairs(dstHead:GetChildren()) do
+	local existing = character:FindFirstChildOfClass("BodyColors")
+	if existing then
+		pcall(function()
+			existing:Destroy()
+		end)
+	end
+
+	local bodyColors = Instance.new("BodyColors")
+	local colorMap = {
+		HeadColor3 = "HeadColor",
+		TorsoColor3 = "TorsoColor",
+		LeftArmColor3 = "LeftArmColor",
+		RightArmColor3 = "RightArmColor",
+		LeftLegColor3 = "LeftLegColor",
+		RightLegColor3 = "RightLegColor",
+	}
+	for prop, descProp in pairs(colorMap) do
+		pcall(function()
+			local color = description[descProp]
+			if typeof(color) == "Color3" then
+				bodyColors[prop] = color
+			end
+		end)
+	end
+	bodyColors.Parent = character
+end
+
+_G.F.loadAvatarAssetContainer = function(assetId)
+	assetId = tonumber(assetId)
+	if not assetId or assetId <= 0 then
+		return nil
+	end
+
+	local container = nil
+	pcall(function()
+		container = game:GetService("InsertService"):LoadAsset(assetId)
+	end)
+	if container then
+		return container
+	end
+
+	pcall(function()
+		local getObjects = game.GetObjects
+		if type(getObjects) == "function" then
+			local objects = getObjects(game, "rbxassetid://" .. tostring(assetId))
+			if type(objects) == "table" and objects[1] then
+				if #objects == 1 then
+					container = objects[1]
+				else
+					container = Instance.new("Model")
+					container.Name = "LLSPLOIT_Asset_" .. tostring(assetId)
+					for _, object in ipairs(objects) do
+						object.Parent = container
+					end
+				end
+			end
+		end
+	end)
+
+	return container
+end
+
+_G.F.extractPlayableAnimIdFromInstance = function(root)
+	if not root then
+		return nil
+	end
+
+	if root:IsA("Animation") and root.AnimationId and root.AnimationId ~= "" and root.AnimationId ~= "rbxassetid://0" then
+		return root.AnimationId
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("Animation") then
+			local animId = descendant.AnimationId
+			if type(animId) == "string" and animId ~= "" and animId ~= "rbxassetid://0" then
+				return animId
+			end
+		end
+	end
+	return nil
+end
+
+_G.F.resolveCatalogAnimationId = function(assetId)
+	assetId = tonumber(assetId)
+	if not assetId or assetId <= 0 then
+		return nil
+	end
+
+	local cache = _G.localAvatarAnimIdCache
+	if cache[assetId] then
+		return cache[assetId]
+	end
+
+	local playable = nil
+	local container = _G.F.loadAvatarAssetContainer(assetId)
+	if container then
+		playable = _G.F.extractPlayableAnimIdFromInstance(container)
+		pcall(function()
+			container:Destroy()
+		end)
+	end
+	if not playable then
+		playable = "rbxassetid://" .. tostring(assetId)
+	end
+	cache[assetId] = playable
+	return playable
+end
+
+_G.F.parseAccessoryIdList = function(value)
+	local ids = {}
+	if type(value) == "number" and value > 0 then
+		table.insert(ids, value)
+		return ids
+	end
+	if type(value) ~= "string" or value == "" then
+		return ids
+	end
+	for token in string.gmatch(value, "[^,]+") do
+		local id = tonumber((string.gsub(token, "%s+", "")))
+		if id and id > 0 then
+			table.insert(ids, id)
+		end
+	end
+	return ids
+end
+
+_G.F.collectDescriptionAccessoryIds = function(description)
+	local ids = {}
+	local seen = {}
+
+	local function add(id)
+		id = tonumber(id)
+		if id and id > 0 and not seen[id] then
+			seen[id] = true
+			table.insert(ids, id)
+		end
+	end
+
+	pcall(function()
+		local accessories = description:GetAccessories(true)
+		if type(accessories) == "table" then
+			for _, entry in ipairs(accessories) do
+				if type(entry) == "table" then
+					add(entry.AssetId or entry.assetId)
+				end
+			end
+		end
+	end)
+
+	local props = {
+		"HatAccessory",
+		"HairAccessory",
+		"FaceAccessory",
+		"NeckAccessory",
+		"ShoulderAccessory",
+		"FrontAccessory",
+		"BackAccessory",
+		"WaistAccessory",
+	}
+	for _, prop in ipairs(props) do
+		local value = nil
+		pcall(function()
+			value = description[prop]
+		end)
+		for _, id in ipairs(_G.F.parseAccessoryIdList(value)) do
+			add(id)
+		end
+	end
+
+	return ids
+end
+
+_G.F.attachLoadedInstanceToCharacter = function(humanoid, character, instance)
+	if not instance or not character then
+		return
+	end
+
+	local function attachOne(item)
+		if item:IsA("Accessory") then
+			local clone = item:Clone()
+			local added = false
+			if humanoid then
+				local ok = pcall(function()
+					humanoid:AddAccessory(clone)
+				end)
+				added = ok and clone.Parent ~= nil
+			end
+			if not added then
+				pcall(function()
+					clone.Parent = character
+				end)
+			end
+			for _, part in ipairs(clone:GetDescendants()) do
+				if part:IsA("BasePart") then
+					pcall(function()
+						part.CanCollide = false
+						part.Massless = true
+					end)
+				end
+			end
+		elseif item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") or item:IsA("CharacterMesh") then
+			pcall(function()
+				item:Clone().Parent = character
+			end)
+		elseif item:IsA("Decal") and string.lower(item.Name) == "face" then
+			local head = character:FindFirstChild("Head")
+			if head then
+				for _, child in ipairs(head:GetChildren()) do
+					if child:IsA("Decal") and string.lower(child.Name) == "face" then
+						pcall(function()
+							child:Destroy()
+						end)
+					end
+				end
+				pcall(function()
+					item:Clone().Parent = head
+				end)
+			end
+		elseif item:IsA("Model") or item:IsA("Folder") then
+			for _, child in ipairs(item:GetChildren()) do
+				attachOne(child)
+			end
+		end
+	end
+
+	attachOne(instance)
+end
+
+_G.F.applyClothingFromDescription = function(character, description)
+	if not character or not description then
+		return
+	end
+
+	local function applyClothing(assetId, className, templateProp)
+		assetId = tonumber(assetId)
+		if not assetId or assetId <= 0 then
+			return
+		end
+
+		local container = _G.F.loadAvatarAssetContainer(assetId)
+		local applied = false
+		if container then
+			for _, descendant in ipairs(container:GetDescendants()) do
+				if descendant:IsA(className) then
+					pcall(function()
+						descendant:Clone().Parent = character
+					end)
+					applied = true
+				end
+			end
+			if container:IsA(className) then
+				pcall(function()
+					container:Clone().Parent = character
+				end)
+				applied = true
+			end
+			pcall(function()
+				container:Destroy()
+			end)
+		end
+
+		if not applied then
+			local clothing = Instance.new(className)
+			pcall(function()
+				clothing[templateProp] = "rbxassetid://" .. tostring(assetId)
+			end)
+			clothing.Parent = character
+		end
+	end
+
+	local shirtId, pantsId, graphicId = 0, 0, 0
+	pcall(function()
+		shirtId = description.Shirt
+		pantsId = description.Pants
+		graphicId = description.GraphicTShirt
+	end)
+	applyClothing(shirtId, "Shirt", "ShirtTemplate")
+	applyClothing(pantsId, "Pants", "PantsTemplate")
+	applyClothing(graphicId, "ShirtGraphic", "Graphic")
+end
+
+_G.F.applyFaceFromDescription = function(character, description)
+	if not character or not description then
+		return
+	end
+
+	local faceId = 0
+	pcall(function()
+		faceId = description.Face
+	end)
+	faceId = tonumber(faceId)
+	if not faceId or faceId <= 0 then
+		return
+	end
+
+	local head = character:FindFirstChild("Head")
+	if not head then
+		return
+	end
+
+	for _, child in ipairs(head:GetChildren()) do
 		if child:IsA("Decal") and string.lower(child.Name) == "face" then
 			pcall(function()
 				child:Destroy()
@@ -1660,141 +1959,102 @@ _G.F.copyHeadFaceFromModel = function(sourceModel, targetCharacter)
 		end
 	end
 
-	for _, child in ipairs(srcHead:GetChildren()) do
-		if child:IsA("Decal") and string.lower(child.Name) == "face" then
-			pcall(function()
-				child:Clone().Parent = dstHead
-			end)
+	local container = _G.F.loadAvatarAssetContainer(faceId)
+	local applied = false
+	if container then
+		_G.F.attachLoadedInstanceToCharacter(nil, character, container)
+		for _, descendant in ipairs(container:GetDescendants()) do
+			if descendant:IsA("Decal") then
+				applied = true
+			end
 		end
-	end
-end
-
-_G.F.attachAccessoryToCharacter = function(humanoid, character, accessory)
-	if not accessory then
-		return false
-	end
-
-	local clone = accessory:Clone()
-	local added = false
-	if humanoid then
-		local ok = pcall(function()
-			humanoid:AddAccessory(clone)
-		end)
-		added = ok and clone.Parent ~= nil
-	end
-
-	if not added then
 		pcall(function()
-			clone.Parent = character
+			container:Destroy()
 		end)
 	end
 
-	for _, part in ipairs(clone:GetDescendants()) do
-		if part:IsA("BasePart") then
-			pcall(function()
-				part.CanCollide = false
-				part.Massless = true
-			end)
-		end
+	if not applied then
+		local decal = Instance.new("Decal")
+		decal.Name = "face"
+		decal.Face = Enum.NormalId.Front
+		decal.Texture = "rbxassetid://" .. tostring(faceId)
+		decal.Parent = head
 	end
-
-	return clone.Parent ~= nil
 end
 
-_G.F.syncAnimateFromModel = function(sourceModel, targetCharacter)
-	local srcAnimate = sourceModel and sourceModel:FindFirstChild("Animate")
-	local dstAnimate = targetCharacter and targetCharacter:FindFirstChild("Animate")
-	if not srcAnimate or not dstAnimate then
-		return false
+_G.F.patchAnimateFolderAnimId = function(folder, playableId)
+	if not folder or not playableId then
+		return
 	end
 
-	local function copyAnimIds(srcFolder, dstFolder)
-		if not srcFolder or not dstFolder then
-			return
-		end
-
-		-- Map destination Animation / StringValue children by name, then by order.
-		local dstAnims = {}
-		local dstStrings = {}
-		for _, child in ipairs(dstFolder:GetChildren()) do
-			if child:IsA("Animation") then
-				table.insert(dstAnims, child)
-			elseif child:IsA("StringValue") then
-				table.insert(dstStrings, child)
-			end
-		end
-
-		local animIndex = 0
-		local stringIndex = 0
-		for _, child in ipairs(srcFolder:GetChildren()) do
-			if child:IsA("Animation") and child.AnimationId and child.AnimationId ~= "" then
-				animIndex = animIndex + 1
-				local dst = dstFolder:FindFirstChild(child.Name)
-				if not (dst and dst:IsA("Animation")) then
-					dst = dstAnims[animIndex]
-				end
-				if dst and dst:IsA("Animation") then
-					pcall(function()
-						dst.AnimationId = child.AnimationId
-					end)
-				else
-					pcall(function()
-						local created = child:Clone()
-						created.Parent = dstFolder
-					end)
-				end
-			elseif child:IsA("StringValue") and child.Value and child.Value ~= "" then
-				stringIndex = stringIndex + 1
-				local dst = dstFolder:FindFirstChild(child.Name)
-				if not (dst and dst:IsA("StringValue")) then
-					dst = dstStrings[stringIndex]
-				end
-				if dst and dst:IsA("StringValue") then
-					pcall(function()
-						dst.Value = child.Value
-					end)
-				end
-
-				-- Nested Animation under StringValue (classic Animate layout).
-				for _, nested in ipairs(child:GetChildren()) do
-					if nested:IsA("Animation") and nested.AnimationId and nested.AnimationId ~= "" then
-						local dstNested = dst and dst:FindFirstChild(nested.Name)
-						if dstNested and dstNested:IsA("Animation") then
-							pcall(function()
-								dstNested.AnimationId = nested.AnimationId
-							end)
-						elseif dst then
-							local existing = dst:FindFirstChildOfClass("Animation")
-							if existing then
-								pcall(function()
-									existing.AnimationId = nested.AnimationId
-								end)
-							else
-								pcall(function()
-									nested:Clone().Parent = dst
-								end)
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	for _, folder in ipairs(srcAnimate:GetChildren()) do
-		local dstFolder = dstAnimate:FindFirstChild(folder.Name)
-		if not dstFolder then
+	local patched = false
+	for _, descendant in ipairs(folder:GetDescendants()) do
+		if descendant:IsA("Animation") then
 			pcall(function()
-				dstFolder = folder:Clone()
-				dstFolder.Parent = dstAnimate
+				descendant.AnimationId = playableId
+			end)
+			patched = true
+		elseif descendant:IsA("StringValue") and descendant.Value and descendant.Value ~= "" then
+			pcall(function()
+				descendant.Value = playableId
+			end)
+			patched = true
+		end
+	end
+
+	if not patched then
+		if folder:IsA("StringValue") then
+			pcall(function()
+				folder.Value = playableId
 			end)
 		else
-			copyAnimIds(folder, dstFolder)
+			local animation = Instance.new("Animation")
+			animation.Name = "Animation1"
+			animation.AnimationId = playableId
+			animation.Parent = folder
+		end
+	end
+end
+
+_G.F.applyAnimatePacksFromDescription = function(character, description)
+	if not character or not description then
+		return
+	end
+
+	local animate = character:FindFirstChild("Animate")
+	if not animate then
+		return
+	end
+
+	local mapping = {
+		idle = "IdleAnimation",
+		walk = "WalkAnimation",
+		run = "RunAnimation",
+		jump = "JumpAnimation",
+		fall = "FallAnimation",
+		climb = "ClimbAnimation",
+		swim = "SwimAnimation",
+	}
+
+	for folderName, propName in pairs(mapping) do
+		local catalogId = nil
+		pcall(function()
+			catalogId = description[propName]
+		end)
+		catalogId = tonumber(catalogId)
+		if catalogId and catalogId > 0 then
+			local playable = _G.F.resolveCatalogAnimationId(catalogId)
+			local folder = animate:FindFirstChild(folderName)
+			if not folder then
+				folder = Instance.new("StringValue")
+				folder.Name = folderName
+				folder.Parent = animate
+			end
+			_G.F.patchAnimateFolderAnimId(folder, playable)
 		end
 	end
 
-	-- Nudge Animate to pick up new pack ids.
-	local humanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		pcall(function()
 			local animator = humanoid:FindFirstChildOfClass("Animator")
@@ -1808,8 +2068,6 @@ _G.F.syncAnimateFromModel = function(sourceModel, targetCharacter)
 			end
 		end)
 	end
-
-	return true
 end
 
 _G.F.morphCharacterFromDescription = function(character, description)
@@ -1817,49 +2075,30 @@ _G.F.morphCharacterFromDescription = function(character, description)
 		return false, "Character/description missing."
 	end
 
-	local Players = game:GetService("Players")
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then
 		return false, "Humanoid missing."
 	end
 
-	local okModel, template = pcall(function()
-		return Players:CreateHumanoidModelFromDescription(description, humanoid.RigType)
-	end)
-	if not okModel or template == nil then
-		return false, "Could not build avatar template."
-	end
-
-	-- Keep template out of Workspace physics.
-	pcall(function()
-		template.Name = "LLSPLOIT_AvatarTemplate"
-		template.Parent = nil
-	end)
-
+	-- Hard guard: never touch server-only ApplyDescription APIs.
 	local ok, err = pcall(function()
 		_G.F.clearCharacterCosmetics(character)
 		_G.F.applyHumanoidScalesFromDescription(humanoid, description)
+		_G.F.applyBodyColorsFromDescription(character, description)
+		_G.F.applyClothingFromDescription(character, description)
+		_G.F.applyFaceFromDescription(character, description)
 
-		for _, child in ipairs(template:GetChildren()) do
-			if child:IsA("Accessory") then
-				_G.F.attachAccessoryToCharacter(humanoid, character, child)
-			elseif child:IsA("Shirt")
-				or child:IsA("Pants")
-				or child:IsA("ShirtGraphic")
-				or child:IsA("BodyColors")
-				or child:IsA("CharacterMesh") then
+		for _, assetId in ipairs(_G.F.collectDescriptionAccessoryIds(description)) do
+			local container = _G.F.loadAvatarAssetContainer(assetId)
+			if container then
+				_G.F.attachLoadedInstanceToCharacter(humanoid, character, container)
 				pcall(function()
-					child:Clone().Parent = character
+					container:Destroy()
 				end)
 			end
 		end
 
-		_G.F.copyHeadFaceFromModel(template, character)
-		_G.F.syncAnimateFromModel(template, character)
-	end)
-
-	pcall(function()
-		template:Destroy()
+		_G.F.applyAnimatePacksFromDescription(character, description)
 	end)
 
 	if not ok then
@@ -1883,7 +2122,6 @@ _G.F.clearLocalOnlyAvatar = function()
 		return
 	end
 
-	-- Restore without ApplyDescription (server-only).
 	pcall(function()
 		_G.F.morphCharacterFromDescription(character, state.originalDescription)
 	end)
