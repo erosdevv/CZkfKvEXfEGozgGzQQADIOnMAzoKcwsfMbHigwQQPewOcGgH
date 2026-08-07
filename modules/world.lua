@@ -1545,6 +1545,7 @@ _G.localAvatarState = _G.localAvatarState or {
 	hideConn = nil,
 	characterConn = nil,
 	ancestryConn = nil,
+	animController = nil,
 }
 
 _G.LOCAL_AVATAR_USER_ID_POOL = {
@@ -1565,6 +1566,17 @@ _G.LOCAL_AVATAR_USER_ID_POOL = {
 	27636987,
 }
 
+-- Fallback R15 locomotion when a description has no custom pack set.
+	_G.LOCAL_AVATAR_DEFAULT_ANIMS = {
+	idle = 507766388,
+	walk = 507777826,
+	run = 507767968,
+	jump = 507765000,
+	fall = 507767968, -- R15 default Animate uses this id for fall
+	climb = 507765644,
+	swim = 913384386,
+}
+
 _G.F.pickLocalAvatarUserId = function(preferred)
 	local preferredId = tonumber(preferred)
 	if preferredId and preferredId > 0 then
@@ -1579,11 +1591,249 @@ _G.F.pickLocalAvatarUserId = function(preferred)
 	return pool[math.random(1, #pool)]
 end
 
+_G.F.resolveLocalAvatarAnimAsset = function(value, fallback)
+	local numeric = tonumber(value)
+	if numeric and numeric > 0 then
+		return "rbxassetid://" .. tostring(numeric)
+	end
+	if type(value) == "string" and value ~= "" and value ~= "0" then
+		if string.find(value, "rbxassetid://", 1, true) then
+			return value
+		end
+		numeric = tonumber(value)
+		if numeric and numeric > 0 then
+			return "rbxassetid://" .. tostring(numeric)
+		end
+	end
+	if fallback and tonumber(fallback) and tonumber(fallback) > 0 then
+		return "rbxassetid://" .. tostring(fallback)
+	end
+	return nil
+end
+
+_G.F.stopLocalAvatarAnimations = function()
+	local state = _G.localAvatarState
+	local controller = type(state) == "table" and state.animController or nil
+	if type(controller) ~= "table" then
+		return
+	end
+
+	for name, track in pairs(controller.tracks or {}) do
+		pcall(function()
+			if track and track.IsPlaying then
+				track:Stop(0)
+			end
+		end)
+	end
+	controller.current = nil
+	state.animController = nil
+end
+
+-- Pull locomotion IDs from the generated Animate LocalScript before we strip it.
+-- Animation packs land here as nested StringValue / Animation children.
+_G.F.collectAnimateScriptAnimIds = function(fakeModel)
+	local found = {}
+	if not fakeModel then
+		return found
+	end
+
+	local animate = fakeModel:FindFirstChild("Animate")
+	if not animate then
+		return found
+	end
+
+	local folderNames = {
+		idle = "idle",
+		walk = "walk",
+		run = "run",
+		jump = "jump",
+		fall = "fall",
+		climb = "climb",
+		swim = "swim",
+	}
+
+	for key, folderName in pairs(folderNames) do
+		local folder = animate:FindFirstChild(folderName)
+		if folder then
+			local bestId = nil
+			for _, child in ipairs(folder:GetDescendants()) do
+				local animId = nil
+				if child:IsA("Animation") then
+					animId = child.AnimationId
+				elseif child:IsA("StringValue") and type(child.Value) == "string" and child.Value ~= "" then
+					animId = child.Value
+				end
+				if animId and animId ~= "" and animId ~= "0" and animId ~= "rbxassetid://0" then
+					bestId = animId
+					break
+				end
+			end
+			-- Also accept a direct StringValue under Animate named like "walk".
+			if not bestId and folder:IsA("StringValue") and folder.Value ~= "" then
+				bestId = folder.Value
+			end
+			if bestId then
+				found[key] = bestId
+			end
+		end
+	end
+
+	return found
+end
+
+_G.F.buildLocalAvatarAnimationController = function(fakeHumanoid, description, fakeModel)
+	if not fakeHumanoid then
+		return nil
+	end
+
+	local animator = fakeHumanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = fakeHumanoid
+	end
+
+	-- Stop any default tracks CreateHumanoidModelFromDescription may have started.
+	pcall(function()
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop(0)
+		end
+	end)
+
+	local fromAnimate = _G.F.collectAnimateScriptAnimIds(fakeModel)
+	local defaults = _G.LOCAL_AVATAR_DEFAULT_ANIMS
+	local mapping = {
+		idle = { "IdleAnimation", defaults.idle, Enum.AnimationPriority.Idle, true },
+		walk = { "WalkAnimation", defaults.walk, Enum.AnimationPriority.Movement, true },
+		run = { "RunAnimation", defaults.run, Enum.AnimationPriority.Movement, true },
+		jump = { "JumpAnimation", defaults.jump, Enum.AnimationPriority.Action, false },
+		fall = { "FallAnimation", defaults.fall, Enum.AnimationPriority.Movement, true },
+		climb = { "ClimbAnimation", defaults.climb, Enum.AnimationPriority.Movement, true },
+		swim = { "SwimAnimation", defaults.swim, Enum.AnimationPriority.Movement, true },
+	}
+
+	local tracks = {}
+	for name, info in pairs(mapping) do
+		local prop, fallback, priority, looped = info[1], info[2], info[3], info[4]
+		local descValue = description and description[prop] or nil
+		-- Prefer Animate pack entries (what players actually equip), then description, then defaults.
+		local asset = _G.F.resolveLocalAvatarAnimAsset(fromAnimate[name], nil)
+			or _G.F.resolveLocalAvatarAnimAsset(descValue, fallback)
+		if asset then
+			local animation = Instance.new("Animation")
+			animation.Name = "LLSPLOIT_" .. name
+			animation.AnimationId = asset
+			local ok, track = pcall(function()
+				return animator:LoadAnimation(animation)
+			end)
+			if ok and track then
+				pcall(function()
+					track.Looped = looped and true or false
+					track.Priority = priority
+				end)
+				tracks[name] = track
+			end
+		end
+	end
+
+	return {
+		tracks = tracks,
+		current = nil,
+		animator = animator,
+	}
+end
+
+_G.F.playLocalAvatarAnimation = function(controller, name, fade)
+	if type(controller) ~= "table" or type(controller.tracks) ~= "table" then
+		return
+	end
+	if controller.current == name then
+		return
+	end
+
+	fade = tonumber(fade) or 0.15
+	local previous = controller.current and controller.tracks[controller.current] or nil
+	if previous then
+		pcall(function()
+			previous:Stop(fade)
+		end)
+	end
+
+	local nextTrack = controller.tracks[name]
+	if nextTrack then
+		pcall(function()
+			nextTrack:Play(fade)
+		end)
+		controller.current = name
+	else
+		controller.current = nil
+	end
+end
+
+_G.F.syncLocalAvatarAnimation = function(controller, realHumanoid, realRoot)
+	if type(controller) ~= "table" or not realHumanoid then
+		return
+	end
+
+	local stateOk, humanoidState = pcall(function()
+		return realHumanoid:GetState()
+	end)
+	if not stateOk then
+		return
+	end
+
+	local moving = false
+	pcall(function()
+		moving = realHumanoid.MoveDirection.Magnitude > 0.08
+	end)
+
+	local speed = 0
+	if realRoot then
+		pcall(function()
+			local velocity = realRoot.AssemblyLinearVelocity or realRoot.Velocity
+			speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+		end)
+	end
+
+	local name = "idle"
+	if humanoidState == Enum.HumanoidStateType.Jumping then
+		name = "jump"
+	elseif humanoidState == Enum.HumanoidStateType.Freefall then
+		name = "fall"
+	elseif humanoidState == Enum.HumanoidStateType.Climbing then
+		name = "climb"
+	elseif humanoidState == Enum.HumanoidStateType.Swimming then
+		name = "swim"
+	elseif moving or speed > 1 then
+		local walkSpeed = tonumber(realHumanoid.WalkSpeed) or 16
+		if speed >= math.max(14, walkSpeed * 0.85) then
+			name = "run"
+		else
+			name = "walk"
+		end
+	end
+
+	_G.F.playLocalAvatarAnimation(controller, name, 0.12)
+
+	local track = controller.tracks[controller.current]
+	if track and (controller.current == "walk" or controller.current == "run") then
+		local walkSpeed = tonumber(realHumanoid.WalkSpeed) or 16
+		local scale = 1
+		if walkSpeed > 0 then
+			scale = math.clamp(speed / walkSpeed, 0.5, 2)
+		end
+		pcall(function()
+			track:AdjustSpeed(scale)
+		end)
+	end
+end
+
 _G.F.clearLocalOnlyAvatar = function()
 	local state = _G.localAvatarState
 	if type(state) ~= "table" then
 		return
 	end
+
+	_G.F.stopLocalAvatarAnimations()
 
 	if state.followConn then
 		pcall(function()
@@ -1671,18 +1921,22 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 	local okDesc, description = pcall(function()
 		return Players:GetHumanoidDescriptionFromUserId(userId)
 	end)
-	if not okDesc or typeof(description) ~= "Instance" then
+	if not okDesc or description == nil then
 		return false, "Could not load avatar description for " .. tostring(userId)
 	end
 
 	local okModel, fake = pcall(function()
 		return Players:CreateHumanoidModelFromDescription(description, humanoid.RigType)
 	end)
-	if not okModel or typeof(fake) ~= "Instance" then
+	if not okModel or fake == nil then
 		return false, "Could not build local avatar model."
 	end
 
 	_G.F.clearLocalOnlyAvatar()
+
+	local fakeHumanoid = fake:FindFirstChildOfClass("Humanoid")
+	-- Build tracks from Animate pack + description BEFORE stripping LocalScripts.
+	local animController = _G.F.buildLocalAvatarAnimationController(fakeHumanoid, description, fake)
 
 	for _, descendant in ipairs(fake:GetDescendants()) do
 		if descendant:IsA("Script") or descendant:IsA("LocalScript") then
@@ -1700,7 +1954,6 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 		end
 	end
 
-	local fakeHumanoid = fake:FindFirstChildOfClass("Humanoid")
 	if fakeHumanoid then
 		pcall(function()
 			fakeHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
@@ -1717,7 +1970,13 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 	fake.Parent = (camera and camera.Parent) and camera or workspace
 
 	_G.localAvatarState.fake = fake
+	_G.localAvatarState.animController = animController
 	_G.F.setCharacterLocalHidden(character, true)
+
+	-- Kick idle immediately so the overlay isn't a T-pose while standing still.
+	if animController then
+		_G.F.playLocalAvatarAnimation(animController, "idle", 0)
+	end
 
 	_G.localAvatarState.hideConn = character.DescendantAdded:Connect(function(descendant)
 		if not _G.localAvatarEnabled or _G.localAvatarState.fake ~= fake then
@@ -1757,6 +2016,9 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			pcall(function()
 				fakeHum.HipHeight = realHum.HipHeight
 			end)
+		end
+		if realHum and _G.localAvatarState.animController then
+			_G.F.syncLocalAvatarAnimation(_G.localAvatarState.animController, realHum, realRoot)
 		end
 	end)
 
