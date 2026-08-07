@@ -1071,7 +1071,7 @@ end)
 if settingsAvatarSection then
 	settingsBuild("Local Avatar toggle", function()
 		_G.configUi.localAvatarToggle = settingsAvatarSection:AddToggle({
-			Name = "Client Avatar Swap",
+			Name = "Avatar Swap",
 			Default = _G.localAvatarEnabled,
 			Color = Color3.fromRGB(160, 200, 255),
 			Callback = function(value)
@@ -1079,15 +1079,15 @@ if settingsAvatarSection then
 				if value and ok then
 					pcall(function()
 						_G.OrionLib:MakeNotification({
-							Name = "Local Avatar",
-							Content = "Using client-only avatar " .. tostring(_G.localAvatarUserId or reason),
+							Name = "Avatar Swap",
+							Content = "Applied avatar " .. tostring(_G.localAvatarUserId or reason),
 							Time = 3
 						})
 					end)
 				elseif not ok and reason then
 					pcall(function()
 						_G.OrionLib:MakeNotification({
-							Name = "Local Avatar",
+							Name = "Avatar Swap",
 							Content = tostring(reason),
 							Time = 4
 						})
@@ -1115,14 +1115,14 @@ if settingsAvatarSection then
 
 	settingsBuild("Reroll Local Avatar", function()
 		settingsAvatarSection:AddButton({
-			Name = "Reroll Local Avatar",
+			Name = "Reroll Avatar",
 			Icon = "shuffle",
 			Callback = function()
 				local ok, result = _G.F.rerollLocalOnlyAvatar()
 				pcall(function()
 					_G.OrionLib:MakeNotification({
-						Name = "Local Avatar",
-						Content = ok and ("Swapped to " .. tostring(result)) or tostring(result),
+						Name = "Avatar Swap",
+						Content = ok and ("Applied " .. tostring(result)) or tostring(result),
 						Time = 3
 					})
 				end)
