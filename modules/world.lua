@@ -1981,6 +1981,14 @@ _G.F.clearLocalOnlyAvatar = function()
 		state.fake = nil
 	end
 
+	-- Clean up any leftover Workspace host from older builds that could fling.
+	pcall(function()
+		local folder = workspace:FindFirstChild("LLSPLOIT_LocalAvatars")
+		if folder then
+			folder:Destroy()
+		end
+	end)
+
 	local player = game:GetService("Players").LocalPlayer
 	local character = player and player.Character
 	if character then
