@@ -348,10 +348,15 @@ end
 _G.jackAutoBattle = _G.jackAutoBattle or { Move = "Disabled", Trainer = "Disabled" }
 _G.jackSyncingDropdownUi = false
 _G.jackLastTrainerListSignature = ""
+-- Concrete battleable catalog for the current chunk, keyed by #Battle id string.
+-- Each entry: { id, name, label, rematch, trainer, npc }
+_G.jackBattleableTrainers = _G.jackBattleableTrainers or {}
+_G.jackTrainerById = _G.jackTrainerById or {}
+_G.jackTrainerDropdownOptions = _G.jackTrainerDropdownOptions or { "Disabled" }
+-- Legacy aliases kept so older hooks / dumps don't nil-index.
 _G.jackTrainerList = _G.jackTrainerList or {}
 _G.jackTrainerConfigs = _G.jackTrainerConfigs or {}
 _G.jackTrainerBattleKeys = _G.jackTrainerBattleKeys or {}
-_G.jackTrainerDropdownOptions = _G.jackTrainerDropdownOptions or { "Disabled" }
 _G.jackBattleLoopsStarted = _G.jackBattleLoopsStarted or false
 
 _G.F.jackGetBattle = function()
@@ -458,39 +463,6 @@ _G.F.setDropdownUiValue = function(dropdown, value)
 	_G.jackSyncingDropdownUi = false
 end
 
-_G.F.getJackTrainerListSignature = function()
-	return table.concat(_G.jackTrainerList, "\31")
-end
-
-_G.F.jackNormalizeTrainerTarget = function(value)
-	local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
-	if text == "" or string.lower(text) == "disabled" or text == "0" then
-		return "Disabled"
-	end
-	return text
-end
-
-_G.F.jackBuildTrainerDropdownOptions = function()
-	-- Legacy helper; Trainer Target is an ID textbox now.
-	return { "Disabled" }
-end
-
-_G.F.jackSyncTrainerDropdown = function(forceValue)
-	-- Trainer Target is an ID textbox now; keep this name for config sync callers.
-	local selected = _G.F.jackNormalizeTrainerTarget(forceValue or _G.jackAutoBattle.Trainer)
-	_G.jackAutoBattle.Trainer = selected
-	_G.autoTrainerEnabled = selected ~= "Disabled"
-
-	local textbox = _G.configUi and (_G.configUi.jackTrainerIdTextbox or _G.configUi.jackTrainerDropdown)
-	if type(textbox) == "table" and type(textbox.Set) == "function" then
-		_G.jackSyncingDropdownUi = true
-		pcall(function()
-			textbox:Set(selected == "Disabled" and "" or selected)
-		end)
-		_G.jackSyncingDropdownUi = false
-	end
-end
-
 _G.F.jackIsNpcModel = function(model)
 	if model == nil then
 		return false
@@ -504,157 +476,304 @@ _G.F.jackIsNpcModel = function(model)
 	return ok and kind == "Instance"
 end
 
-_G.F.jackProcessTrainerNpc = function(npc)
+_G.F.jackNpcInWorkspace = function(npc)
 	if type(npc) ~= "table" or not _G.F.jackIsNpcModel(npc.model) then
-		return
+		return false
+	end
+	local inWorkspace = false
+	pcall(function()
+		inWorkspace = npc.model:IsDescendantOf(workspace)
+	end)
+	return inWorkspace == true
+end
+
+_G.F.jackReadNpcBattleId = function(npc)
+	if type(npc) ~= "table" or not _G.F.jackIsNpcModel(npc.model) then
+		return nil
 	end
 
-	if not _G.F.ensureP() then
-		return
-	end
-
-	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
-	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
-	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	if type(battles) ~= "table" then
-		return
-	end
-
-	-- MrJack: read #Battle.Value as-is (no tonumber), fallback "Mrjack".
-	local battleId = nil
 	local okBattle, battleValue = pcall(function()
 		return npc.model:FindFirstChild("#Battle")
 	end)
-	if okBattle and battleValue then
-		local okValue, value = pcall(function()
-			return battleValue.Value
-		end)
-		if okValue and value ~= nil and value ~= "" then
-			battleId = value
-		end
-	end
-	if battleId == nil then
-		battleId = "Mrjack"
+	if not okBattle or not battleValue then
+		return nil
 	end
 
-	local trainerData = battles[tostring(battleId)] or battles[battleId]
-	if type(trainerData) ~= "table" then
-		return
+	local okValue, value = pcall(function()
+		return battleValue.Value
+	end)
+	if not okValue or value == nil or value == "" then
+		return nil
 	end
 
-	local trainerName = trainerData.Name or trainerData.name
-	if type(trainerName) ~= "string" or trainerName == "" then
-		return
-	end
-
-	_G.jackTrainerBattleKeys[trainerName] = tostring(battleId)
-	_G.jackTrainerConfigs[trainerName] = {
-		trainer = trainerData,
-		opponentBaseNPC = npc,
-		battleKey = tostring(battleId),
-	}
-
-	-- Prefer RematchQuestion trainers; also allow BattleScene chunks so routes
-	-- without RematchQuestion still populate Trainer Target (pre-tighten OR).
-	local regionData = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "regionData") or nil
-	local hasBattleScene = type(regionData) == "table" and regionData.BattleScene and true or false
-	if (trainerData.RematchQuestion or hasBattleScene) and not table.find(_G.jackTrainerList, trainerName) then
-		table.insert(_G.jackTrainerList, trainerName)
-	end
+	return value
 end
 
-_G.F.jackScanTrainerNpcs = function()
-	if not _G.F.ensureP() then
-		return
+_G.F.jackLookupChunkBattle = function(battles, battleId)
+	if type(battles) ~= "table" or battleId == nil then
+		return nil
+	end
+	return battles[battleId] or battles[tostring(battleId)] or battles[tonumber(battleId)]
+end
+
+-- Normalize UI/config values down to a bare #Battle id string, or "Disabled".
+-- Accepts: "", "Disabled", "43", 43, "#43 Rival", "#43 Rival (Rematch)"
+_G.F.jackNormalizeTrainerTarget = function(value)
+	local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+	if text == "" or string.lower(text) == "disabled" or text == "0" or text == "..." then
+		return "Disabled"
 	end
 
-	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
-	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
-	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	if type(battles) ~= "table" or next(battles) == nil then
-		_G.jackTrainerList = {}
-		_G.jackTrainerConfigs = {}
-		_G.jackTrainerBattleKeys = {}
-		return
+	local fromLabel = string.match(text, "^#(%S+)")
+	if fromLabel and fromLabel ~= "" then
+		return fromLabel
 	end
 
-	-- Prune against current chunk.battles before GetNPCs so a failed NPC scan
-	-- cannot leave previous-chunk trainer names in the dropdown.
-	local battleNames = {}
-	for _, battleData in pairs(battles) do
-		if type(battleData) == "table" then
-			local name = battleData.Name or battleData.name
-			if type(name) == "string" and name ~= "" then
-				battleNames[name] = true
+	return text
+end
+
+_G.F.jackFormatTrainerOption = function(entry)
+	if type(entry) ~= "table" then
+		return "Disabled"
+	end
+	local id = tostring(entry.id or "")
+	local name = tostring(entry.name or "Trainer")
+	if entry.rematch then
+		return string.format("#%s %s (Rematch)", id, name)
+	end
+	return string.format("#%s %s", id, name)
+end
+
+_G.F.jackFindTrainerOptionForId = function(battleId)
+	battleId = _G.F.jackNormalizeTrainerTarget(battleId)
+	if battleId == "Disabled" then
+		return "Disabled"
+	end
+
+	for _, option in ipairs(_G.jackTrainerDropdownOptions or {}) do
+		if option ~= "Disabled" then
+			local optionId = string.match(tostring(option), "^#(%S+)")
+			if optionId and tostring(optionId) == tostring(battleId) then
+				return option
 			end
 		end
 	end
 
-	for index = #_G.jackTrainerList, 1, -1 do
-		local name = _G.jackTrainerList[index]
-		if name ~= "Disabled" and not battleNames[name] then
-			table.remove(_G.jackTrainerList, index)
-			_G.jackTrainerConfigs[name] = nil
-			_G.jackTrainerBattleKeys[name] = nil
-		end
+	local cached = _G.jackTrainerById and _G.jackTrainerById[tostring(battleId)]
+	if type(cached) == "table" and type(cached.label) == "string" then
+		return cached.label
+	end
+
+	return nil
+end
+
+_G.F.getJackTrainerListSignature = function()
+	local parts = {}
+	for _, entry in ipairs(_G.jackBattleableTrainers or {}) do
+		table.insert(parts, tostring(entry.id) .. "=" .. tostring(entry.name or ""))
+	end
+	return table.concat(parts, "\31")
+end
+
+-- Concrete battleable definition for the current chunk:
+-- 1) NPC is currently in Workspace
+-- 2) NPC has a #Battle value
+-- 3) currentChunk.battles[id] exists with a Name
+_G.F.jackCollectBattleableTrainers = function()
+	local found = {}
+	if not _G.F.ensureP() then
+		return found
+	end
+
+	local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+	local currentChunk = type(dataManager) == "table" and _G.F.safeTableGet(dataManager, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	if type(battles) ~= "table" or next(battles) == nil then
+		return found
 	end
 
 	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
 	if type(collectionManager) ~= "table" or type(collectionManager.GetNPCs) ~= "function" then
-		table.sort(_G.jackTrainerList, function(a, b)
-			return tostring(a) < tostring(b)
-		end)
-		return
+		return found
 	end
 
 	local ok, npcs = pcall(function()
 		return collectionManager:GetNPCs()
 	end)
 	if not ok or type(npcs) ~= "table" then
-		table.sort(_G.jackTrainerList, function(a, b)
-			return tostring(a) < tostring(b)
-		end)
-		return
+		return found
 	end
 
-	-- MrJack ForLooP iterates the full GetNPCs map (not ipairs-only).
-	local seen = {}
+	local seenIds = {}
+	local seenNpcs = {}
 	for _, npc in pairs(npcs) do
-		if type(npc) == "table" and not seen[npc] then
-			seen[npc] = true
-			pcall(function()
-				_G.F.jackProcessTrainerNpc(npc)
-			end)
+		if type(npc) == "table" and not seenNpcs[npc] and _G.F.jackNpcInWorkspace(npc) then
+			seenNpcs[npc] = true
+			local battleId = _G.F.jackReadNpcBattleId(npc)
+			if battleId ~= nil then
+				local idText = tostring(battleId)
+				if not seenIds[idText] then
+					local trainerData = _G.F.jackLookupChunkBattle(battles, battleId)
+					if type(trainerData) == "table" then
+						local trainerName = trainerData.Name or trainerData.name
+						if type(trainerName) == "string" and trainerName ~= "" then
+							seenIds[idText] = true
+							local entry = {
+								id = idText,
+								name = trainerName,
+								rematch = trainerData.RematchQuestion and true or false,
+								trainer = trainerData,
+								npc = npc,
+							}
+							entry.label = _G.F.jackFormatTrainerOption(entry)
+							table.insert(found, entry)
+						end
+					end
+				end
+			end
 		end
 	end
 
-	table.sort(_G.jackTrainerList, function(a, b)
-		return tostring(a) < tostring(b)
+	table.sort(found, function(a, b)
+		local aNum, bNum = tonumber(a.id), tonumber(b.id)
+		if aNum and bNum and aNum ~= bNum then
+			return aNum < bNum
+		end
+		if a.id ~= b.id then
+			return tostring(a.id) < tostring(b.id)
+		end
+		return tostring(a.name) < tostring(b.name)
 	end)
+
+	return found
 end
 
--- Optional background scan kept for debugging / legacy helpers; Trainer Target
--- no longer depends on the dropdown list (users type #Battle IDs directly).
-_G.F.jackRefreshTrainerTargetFromChunk = function()
-	if not _G.F.ensureP() then
+_G.F.jackBuildTrainerDropdownOptions = function(entries)
+	local options = { "Disabled" }
+	for _, entry in ipairs(entries or _G.jackBattleableTrainers or {}) do
+		if type(entry) == "table" and type(entry.label) == "string" then
+			table.insert(options, entry.label)
+		end
+	end
+	return options
+end
+
+_G.F.jackApplyBattleableCatalog = function(entries)
+	entries = entries or {}
+	_G.jackBattleableTrainers = entries
+	_G.jackTrainerById = {}
+	_G.jackTrainerList = {}
+	_G.jackTrainerConfigs = {}
+	_G.jackTrainerBattleKeys = {}
+
+	for _, entry in ipairs(entries) do
+		local idText = tostring(entry.id)
+		_G.jackTrainerById[idText] = entry
+		table.insert(_G.jackTrainerList, entry.label or entry.name)
+		_G.jackTrainerBattleKeys[entry.name] = idText
+		_G.jackTrainerConfigs[entry.name] = {
+			trainer = entry.trainer,
+			opponentBaseNPC = entry.npc,
+			battleKey = idText,
+		}
+		_G.jackTrainerConfigs[idText] = _G.jackTrainerConfigs[entry.name]
+	end
+
+	_G.jackTrainerDropdownOptions = _G.F.jackBuildTrainerDropdownOptions(entries)
+	return _G.jackTrainerDropdownOptions
+end
+
+_G.F.jackSyncTrainerDropdown = function(forceValue)
+	local selected = _G.F.jackNormalizeTrainerTarget(forceValue or _G.jackAutoBattle.Trainer)
+	_G.jackAutoBattle.Trainer = selected
+	_G.autoTrainerEnabled = selected ~= "Disabled"
+
+	local dropdown = _G.configUi and (_G.configUi.jackTrainerDropdown or _G.configUi.jackTrainerIdTextbox)
+	if type(dropdown) ~= "table" or type(dropdown.Set) ~= "function" then
 		return
 	end
 
-	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
-	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
-	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
-	local hasBattles = type(battles) == "table" and next(battles) ~= nil
-
-	if hasBattles then
-		_G.F.jackScanTrainerNpcs()
-	elseif #_G.jackTrainerList > 0 then
-		_G.jackTrainerList = {}
-		_G.jackTrainerConfigs = {}
-		_G.jackTrainerBattleKeys = {}
+	if selected == "Disabled" then
+		_G.F.setDropdownUiValue(dropdown, "Disabled")
+		return
 	end
 
-	-- Do not overwrite the typed Trainer ID from scan results.
-	_G.jackLastTrainerListSignature = _G.F.getJackTrainerListSignature()
+	local option = _G.F.jackFindTrainerOptionForId(selected)
+	if option then
+		_G.F.setDropdownUiValue(dropdown, option)
+		return
+	end
+
+	-- Trainer id is saved but not battleable in this chunk yet. Push a non-option
+	-- value so Orion shows "..." without firing Callback / clearing the id.
+	_G.F.setDropdownUiValue(dropdown, selected)
+end
+
+_G.F.jackRefreshTrainerDropdownUi = function()
+	local dropdown = _G.configUi and _G.configUi.jackTrainerDropdown
+	if type(dropdown) ~= "table" or type(dropdown.Refresh) ~= "function" then
+		return
+	end
+
+	local options = _G.jackTrainerDropdownOptions or { "Disabled" }
+	_G.jackSyncingDropdownUi = true
+	pcall(function()
+		-- Delete=true is required; Orion appends options when false and duplicates the list.
+		dropdown:Refresh(options, true)
+	end)
+	_G.jackSyncingDropdownUi = false
+	_G.F.jackSyncTrainerDropdown(_G.jackAutoBattle.Trainer)
+end
+
+-- Rebuild the concrete battleable list for the loaded chunk and refresh the UI
+-- only when the set of ids/names actually changes (unless forceUi is true).
+_G.F.jackRefreshTrainerTargetFromChunk = function(forceUi)
+	local entries = _G.F.jackCollectBattleableTrainers()
+	_G.F.jackApplyBattleableCatalog(entries)
+
+	local signature = _G.F.getJackTrainerListSignature()
+	local changed = forceUi == true or signature ~= _G.jackLastTrainerListSignature
+	_G.jackLastTrainerListSignature = signature
+
+	if changed then
+		_G.F.jackRefreshTrainerDropdownUi()
+	end
+
+	return entries
+end
+
+-- Legacy name kept for older callers.
+_G.F.jackScanTrainerNpcs = function()
+	return _G.F.jackRefreshTrainerTargetFromChunk(false)
+end
+
+_G.F.jackProcessTrainerNpc = function(npc)
+	-- Legacy no-op path; full catalog rebuild is owned by jackCollectBattleableTrainers.
+	if type(npc) ~= "table" then
+		return
+	end
+	local battleId = _G.F.jackReadNpcBattleId(npc)
+	if battleId == nil then
+		return
+	end
+	local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+	local currentChunk = type(dataManager) == "table" and _G.F.safeTableGet(dataManager, "currentChunk") or nil
+	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
+	local trainerData = _G.F.jackLookupChunkBattle(battles, battleId)
+	if type(trainerData) ~= "table" then
+		return
+	end
+	local trainerName = trainerData.Name or trainerData.name
+	if type(trainerName) ~= "string" or trainerName == "" then
+		return
+	end
+	local idText = tostring(battleId)
+	_G.jackTrainerBattleKeys[trainerName] = idText
+	_G.jackTrainerConfigs[trainerName] = {
+		trainer = trainerData,
+		opponentBaseNPC = npc,
+		battleKey = idText,
+	}
 end
 
 _G.F.jackInstallDoTrainerBattleHook = function()
@@ -958,8 +1077,17 @@ _G.F.jackRunAutoMoveTick = function(allowWild)
 end
 
 _G.F.jackFindNpcByBattleId = function(battleId)
-	if battleId == nil or battleId == "Disabled" or not _G.F.ensureP() then
+	battleId = _G.F.jackNormalizeTrainerTarget(battleId)
+	if battleId == "Disabled" or not _G.F.ensureP() then
 		return nil
+	end
+
+	local cached = _G.jackTrainerById and _G.jackTrainerById[tostring(battleId)]
+	if type(cached) == "table" and _G.F.jackNpcInWorkspace(cached.npc) then
+		local liveId = _G.F.jackReadNpcBattleId(cached.npc)
+		if liveId ~= nil and tostring(liveId) == tostring(battleId) then
+			return cached.npc
+		end
 	end
 
 	local collectionManager = _G.F.safeTableGet(_G._p, "CollectionManager")
@@ -978,21 +1106,14 @@ _G.F.jackFindNpcByBattleId = function(battleId)
 	local wantNum = tonumber(battleId)
 	local seen = {}
 	for _, npc in pairs(npcs) do
-		if type(npc) == "table" and not seen[npc] and _G.F.jackIsNpcModel(npc.model) then
+		if type(npc) == "table" and not seen[npc] and _G.F.jackNpcInWorkspace(npc) then
 			seen[npc] = true
-			local okBattle, battleValue = pcall(function()
-				return npc.model:FindFirstChild("#Battle")
-			end)
-			if okBattle and battleValue then
-				local okValue, value = pcall(function()
-					return battleValue.Value
-				end)
-				if okValue and value ~= nil then
-					if tostring(value) == wantText
-						or (wantNum ~= nil and tonumber(value) == wantNum)
-						or value == battleId then
-						return npc
-					end
+			local value = _G.F.jackReadNpcBattleId(npc)
+			if value ~= nil then
+				if tostring(value) == wantText
+					or (wantNum ~= nil and tonumber(value) == wantNum)
+					or value == battleId then
+					return npc
 				end
 			end
 		end
@@ -1004,24 +1125,27 @@ end
 _G.F.jackResolveTrainerTarget = function(battleId)
 	battleId = _G.F.jackNormalizeTrainerTarget(battleId)
 	if battleId == "Disabled" or not _G.F.ensureP() then
-		return nil, "No trainer ID set."
+		return nil, "No trainer selected."
 	end
 
-	local currentChunk = _G.F.safeTableGet(_G._p, "DataManager")
-	currentChunk = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "currentChunk") or nil
+	local dataManager = _G.F.safeTableGet(_G._p, "DataManager")
+	local currentChunk = type(dataManager) == "table" and _G.F.safeTableGet(dataManager, "currentChunk") or nil
 	local battles = type(currentChunk) == "table" and _G.F.safeTableGet(currentChunk, "battles") or nil
 	if type(battles) ~= "table" then
 		return nil, "No battles in this chunk."
 	end
 
-	local trainerData = battles[battleId] or battles[tostring(battleId)] or battles[tonumber(battleId)]
+	local cached = _G.jackTrainerById and _G.jackTrainerById[tostring(battleId)]
+	local trainerData = (type(cached) == "table" and cached.trainer)
+		or _G.F.jackLookupChunkBattle(battles, battleId)
 	if type(trainerData) ~= "table" then
-		return nil, "Trainer ID " .. tostring(battleId) .. " is not in this chunk."
+		return nil, "Trainer #" .. tostring(battleId) .. " is not in this chunk."
 	end
 
-	local npc = _G.F.jackFindNpcByBattleId(battleId)
+	local npc = (type(cached) == "table" and _G.F.jackNpcInWorkspace(cached.npc) and cached.npc)
+		or _G.F.jackFindNpcByBattleId(battleId)
 	if not npc then
-		return nil, "NPC for trainer ID " .. tostring(battleId) .. " is not nearby."
+		return nil, "NPC for trainer #" .. tostring(battleId) .. " is not loaded."
 	end
 
 	return {
@@ -1050,16 +1174,8 @@ _G.F.jackRunAutoTrainerTick = function()
 	end
 
 	local opponentBaseNPC = resolved.opponentBaseNPC
-	local opponentModel = type(opponentBaseNPC) == "table" and opponentBaseNPC.model or nil
-	if not _G.F.jackIsNpcModel(opponentModel) then
-		return false, "Trainer NPC is not nearby."
-	end
-	local inWorkspace = false
-	pcall(function()
-		inWorkspace = opponentModel:IsDescendantOf(workspace)
-	end)
-	if not inWorkspace then
-		return false, "Trainer NPC is not nearby."
+	if not _G.F.jackNpcInWorkspace(opponentBaseNPC) then
+		return false, "Trainer NPC is not loaded."
 	end
 
 	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
@@ -1115,11 +1231,11 @@ _G.F.jackStartBattleLoops = function()
 
 	_G.jackBattleLoopsStarted = true
 
-	-- MrJack: continuous GetNPCs trainer discovery, even while Target is Disabled.
+	-- Keep the battleable-trainer catalog in sync with the loaded chunk.
 	task.spawn(function()
 		while _G.uiAlive do
-			pcall(_G.F.jackRefreshTrainerTargetFromChunk)
-			task.wait(0.25)
+			pcall(_G.F.jackRefreshTrainerTargetFromChunk, false)
+			task.wait(0.5)
 		end
 	end)
 
