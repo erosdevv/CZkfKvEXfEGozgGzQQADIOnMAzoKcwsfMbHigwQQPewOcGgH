@@ -1040,6 +1040,8 @@ _G.F.shouldSkipWildEncounterIntro = function(battle)
 
 	return _G.F.hasWildFoeLoaded(battle)
 end
+
+_G.F.getCorruptGleamNum = function()
 	if type(_G._p) ~= "table" then
 		_G._p = _G.F.findP()
 	end
