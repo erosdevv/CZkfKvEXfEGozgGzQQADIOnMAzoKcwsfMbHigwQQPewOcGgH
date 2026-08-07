@@ -1981,6 +1981,14 @@ _G.F.clearLocalOnlyAvatar = function()
 		state.fake = nil
 	end
 
+	-- Clean up any leftover Workspace host from older builds that could fling.
+	pcall(function()
+		local folder = workspace:FindFirstChild("LLSPLOIT_LocalAvatars")
+		if folder then
+			folder:Destroy()
+		end
+	end)
+
 	local player = game:GetService("Players").LocalPlayer
 	local character = player and player.Character
 	if character then
@@ -2093,18 +2101,41 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			fakeHumanoid.JumpPower = 0
 			fakeHumanoid.JumpHeight = 0
 			fakeHumanoid.PlatformStand = true
+			fakeHumanoid.EvaluateStateMachine = false
 		end)
 	end
 
 	fake.Name = "LLSPLOIT_LocalAvatar"
-	-- Keep under Workspace (not Camera) so Animator reliably drives Motor6Ds.
-	local folder = workspace:FindFirstChild("LLSPLOIT_LocalAvatars")
-	if not folder then
-		folder = Instance.new("Folder")
-		folder.Name = "LLSPLOIT_LocalAvatars"
-		folder.Parent = workspace
+	-- Parent under CurrentCamera so the overlay cannot physically collide/fling
+	-- the real character (Workspace duplicates were yeeting players into the void).
+	local camera = workspace.CurrentCamera
+	if camera then
+		fake.Parent = camera
+	else
+		fake.Parent = workspace
 	end
-	fake.Parent = folder
+
+	-- Extra isolation if the engine still simulates the overlay.
+	pcall(function()
+		local PhysicsService = game:GetService("PhysicsService")
+		local groupName = "LLSPLOIT_LocalAvatar"
+		pcall(function()
+			PhysicsService:RegisterCollisionGroup(groupName)
+		end)
+		pcall(function()
+			PhysicsService:CollisionGroupSetCollidable(groupName, "Default", false)
+		end)
+		for _, descendant in ipairs(fake:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				pcall(function()
+					descendant.CollisionGroup = groupName
+					descendant.CanCollide = false
+					descendant.CanTouch = false
+					descendant.CanQuery = false
+				end)
+			end
+		end
+	end)
 
 	_G.localAvatarState.fake = fake
 	_G.localAvatarState.animController = animController
@@ -2141,13 +2172,34 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 			return
 		end
 		local realRoot = character:FindFirstChild("HumanoidRootPart")
-		if not realRoot then
+		local realHum = character:FindFirstChildOfClass("Humanoid")
+		if not realRoot or not realHum then
 			return
 		end
+
+		-- Never let the overlay steal the camera (extra Humanoids can do that).
+		pcall(function()
+			local cam = workspace.CurrentCamera
+			if cam and cam.CameraSubject ~= realHum then
+				cam.CameraSubject = realHum
+			end
+		end)
+
+		-- Keep fake re-parented under the live camera if Roblox recreates it.
+		pcall(function()
+			local cam = workspace.CurrentCamera
+			if cam and fake.Parent ~= cam then
+				fake.Parent = cam
+			end
+		end)
+
 		-- Move only the root; preserve Motor6D animated limb offsets.
 		local rootPart = fake:FindFirstChild("HumanoidRootPart") or fake.PrimaryPart
 		if rootPart then
 			pcall(function()
+				rootPart.Anchored = true
+				rootPart.AssemblyLinearVelocity = Vector3.zero
+				rootPart.AssemblyAngularVelocity = Vector3.zero
 				rootPart.CFrame = realRoot.CFrame
 			end)
 		else
@@ -2155,14 +2207,13 @@ _G.F.applyLocalOnlyAvatar = function(userId)
 				fake:PivotTo(realRoot.CFrame)
 			end)
 		end
-		local realHum = character:FindFirstChildOfClass("Humanoid")
 		local fakeHum = fake:FindFirstChildOfClass("Humanoid")
-		if realHum and fakeHum then
+		if fakeHum then
 			pcall(function()
 				fakeHum.HipHeight = realHum.HipHeight
 			end)
 		end
-		if realHum and _G.localAvatarState.animController then
+		if _G.localAvatarState.animController then
 			_G.F.syncLocalAvatarAnimation(_G.localAvatarState.animController, realHum, realRoot)
 		end
 	end)
