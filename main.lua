@@ -4,7 +4,7 @@
 --   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua?v=" .. tostring(tick())))()
 
 local BRANCH = "main"
-local SCRIPT_VERSION = "auto-trainer-heal-restore-4"
+local SCRIPT_VERSION = "battle-tab-trainers-only-5"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 

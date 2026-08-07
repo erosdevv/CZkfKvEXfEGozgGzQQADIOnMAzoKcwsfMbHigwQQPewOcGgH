@@ -156,6 +156,17 @@ _G.configUi.stopOnWispToggle = _G.EncountersTab:AddToggle({
 	end
 })
 
+_G.configUi.denyNicknameToggle = _G.EncountersTab:AddToggle({
+	Name = "Deny Nickname",
+	Default = _G.denyNicknameEnabled,
+	Color = Color3.fromRGB(180, 150, 255),
+	Callback = function(value)
+		_G.denyNicknameEnabled = value and true or false
+		_G.F.syncJackMiscSettings()
+		_G.F.installJackStyleGameplayHooks()
+	end
+})
+
 _G.EncountersTab:AddSection({ Name = "Wild Move Helpers" })
 
 _G.configUi.useSpareToggle = _G.EncountersTab:AddToggle({
@@ -297,16 +308,82 @@ _G.HuntsTab:AddButton({
 })
 
 
-_G.BattleTab:AddSection({ Name = "Auto Battle" })
+_G.BattleTab:AddSection({ Name = "Trainer Target" })
+
+do
+	-- Seed from whatever is already loaded so the first paint isn't empty.
+	pcall(function()
+		_G.F.jackRefreshTrainerTargetFromChunk(false)
+	end)
+
+	local initialOptions = _G.jackTrainerDropdownOptions or { "Disabled" }
+	local initialSelected = _G.F.jackFindTrainerOptionForId(_G.jackAutoBattle.Trainer) or "Disabled"
+
+	_G.configUi.jackTrainerDropdown = _G.BattleTab:AddDropdown({
+		Name = "Battleable Trainer",
+		Default = initialSelected,
+		Options = initialOptions,
+		Callback = function(value)
+			if _G.jackSyncingDropdownUi then
+				return
+			end
+			_G.F.jackSetAutoTrainer(value)
+		end,
+	})
+
+	-- Legacy alias: older config sync looked for a textbox under this key.
+	_G.configUi.jackTrainerIdTextbox = _G.configUi.jackTrainerDropdown
+end
+
+_G.BattleTab:AddButton({
+	Name = "Refresh Chunk Trainers",
+	Icon = "refresh-cw",
+	Callback = function()
+		local entries = _G.F.jackRefreshTrainerTargetFromChunk(true)
+		local count = type(entries) == "table" and #entries or 0
+		_G.OrionLib:MakeNotification({
+			Name = "Trainers",
+			Content = count > 0
+				and (tostring(count) .. " battleable trainer(s) in this chunk.")
+				or "No battleable trainers loaded in this chunk.",
+			Time = 4,
+		})
+	end,
+})
+
+_G.BattleTab:AddLabel("Battle is trainers only. Use Farm for wild encounters. Format: #ID Name.")
+
+local jackMoveOptions = { "Disabled" }
+for slot = 1, 4 do
+	table.insert(jackMoveOptions, "Move " .. tostring(slot))
+end
+
+_G.BattleTab:AddSection({ Name = "Trainer Auto Move" })
+
+_G.configUi.jackMoveDropdown = _G.BattleTab:AddDropdown({
+	Name = "Auto Move",
+	Default = _G.jackAutoBattle.Move,
+	Options = jackMoveOptions,
+	Callback = function(value)
+		if _G.jackSyncingDropdownUi then
+			return
+		end
+		_G.F.jackSetAutoMove(value)
+	end,
+})
+
+_G.BattleTab:AddSection({ Name = "Trainer Assist" })
 
 _G.configUi.autoBattleToggle = _G.BattleTab:AddToggle({
-	Name = "Auto Battle",
+	Name = "Trainer Assist",
 	Default = _G.autoBattleEnabled,
 	Color = Color3.fromRGB(255, 115, 120),
 	Callback = function(value)
 		_G.F.setAutoBattleEnabled(value)
 	end
 })
+
+_G.BattleTab:AddLabel("Turns on Fast Battle, Skip Dialogue, and prompt denies. Does not touch Farm / wild encounters.")
 
 _G.BattleTab:AddSection({ Name = "Auto Heal" })
 
@@ -344,7 +421,6 @@ _G.BattleTab:AddButton({
 	end
 })
 
-
 _G.BattleTab:AddSection({ Name = "Battle Speed" })
 
 _G.configUi.fastForwardToggle = _G.BattleTab:AddToggle({
@@ -356,7 +432,7 @@ _G.configUi.fastForwardToggle = _G.BattleTab:AddToggle({
 	end
 })
 
-_G.BattleTab:AddSection({ Name = "Prompt Handling" })
+_G.BattleTab:AddSection({ Name = "Trainer Prompts" })
 
 _G.configUi.skipDialogueToggle = _G.BattleTab:AddToggle({
 	Name = "Skip Dialogue",
@@ -391,17 +467,6 @@ _G.configUi.denySwitchRequestToggle = _G.BattleTab:AddToggle({
 	end
 })
 
-_G.configUi.denyNicknameToggle = _G.BattleTab:AddToggle({
-	Name = "Deny Nickname",
-	Default = _G.denyNicknameEnabled,
-	Color = Color3.fromRGB(180, 150, 255),
-	Callback = function(value)
-		_G.denyNicknameEnabled = value and true or false
-		_G.F.syncJackMiscSettings()
-		_G.F.installJackStyleGameplayHooks()
-	end
-})
-
 _G.configUi.disableShowProgressToggle = _G.BattleTab:AddToggle({
 	Name = "Disable Show Progress",
 	Default = _G.disableShowProgressEnabled,
@@ -423,6 +488,8 @@ _G.configUi.ignoreNpcBattleToggle = _G.BattleTab:AddToggle({
 		_G.F.installJackStyleGameplayHooks()
 	end
 })
+
+_G.BattleTab:AddSection({ Name = "Utilities" })
 
 _G.BattleTab:AddButton({
 	Name = "End Battle",
@@ -449,71 +516,6 @@ _G.BattleTab:AddButton({
 		})
 	end
 })
-
-
-local jackMoveOptions = { "Disabled" }
-for slot = 1, 4 do
-	table.insert(jackMoveOptions, "Move " .. tostring(slot))
-end
-
-_G.BattleTab:AddSection({ Name = "Trainer Auto Move" })
-
-_G.configUi.jackMoveDropdown = _G.TrainersTab:AddDropdown({
-	Name = "Auto Move",
-	Default = _G.jackAutoBattle.Move,
-	Options = jackMoveOptions,
-	Callback = function(value)
-		if _G.jackSyncingDropdownUi then
-			return
-		end
-		_G.F.jackSetAutoMove(value)
-	end,
-})
-
-_G.BattleTab:AddSection({ Name = "Trainer Target" })
-
-do
-	-- Seed from whatever is already loaded so the first paint isn't empty.
-	pcall(function()
-		_G.F.jackRefreshTrainerTargetFromChunk(false)
-	end)
-
-	local initialOptions = _G.jackTrainerDropdownOptions or { "Disabled" }
-	local initialSelected = _G.F.jackFindTrainerOptionForId(_G.jackAutoBattle.Trainer) or "Disabled"
-
-	_G.configUi.jackTrainerDropdown = _G.TrainersTab:AddDropdown({
-		Name = "Battleable Trainer",
-		Default = initialSelected,
-		Options = initialOptions,
-		Callback = function(value)
-			if _G.jackSyncingDropdownUi then
-				return
-			end
-			_G.F.jackSetAutoTrainer(value)
-		end,
-	})
-
-	-- Legacy alias: older config sync looked for a textbox under this key.
-	_G.configUi.jackTrainerIdTextbox = _G.configUi.jackTrainerDropdown
-end
-
-_G.TrainersTab:AddButton({
-	Name = "Refresh Chunk Trainers",
-	Icon = "refresh-cw",
-	Callback = function()
-		local entries = _G.F.jackRefreshTrainerTargetFromChunk(true)
-		local count = type(entries) == "table" and #entries or 0
-		_G.OrionLib:MakeNotification({
-			Name = "Trainers",
-			Content = count > 0
-				and (tostring(count) .. " battleable trainer(s) in this chunk.")
-				or "No battleable trainers loaded in this chunk.",
-			Time = 4,
-		})
-	end,
-})
-
-_G.TrainersTab:AddLabel("Shows NPCs in this chunk with #Battle that exist in chunk.battles. Format: #ID Name.")
 
 
 _G.RallyTab:AddSection({ Name = "Rally" })

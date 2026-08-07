@@ -1470,18 +1470,8 @@ _G.F.jackSetAutoTrainer = function(value)
 	local selected = _G.F.jackNormalizeTrainerTarget(value)
 	_G.jackAutoBattle.Trainer = selected
 	_G.autoTrainerEnabled = selected ~= "Disabled"
-
-	-- Auto Battle + Trainer Target means trainer farming, not grass encounters.
-	if _G.autoBattleEnabled then
-		if _G.autoTrainerEnabled then
-			_G.F.setAutoEncounterEnabled(false)
-		else
-			_G.F.setAutoEncounterEnabled(true)
-		end
-		if _G.configUi and _G.configUi.autoEncounterToggle then
-			_G.F.setToggleUi(_G.configUi.autoEncounterToggle, _G.autoEncounterEnabled)
-		end
-	end
+	-- Farm owns wild Auto Encounter. Selecting a trainer only affects the
+	-- trainer tick; the Farm loop already skips grass while a trainer is set.
 end
 
 -- Legacy wrappers kept for encounter automation.
@@ -1553,19 +1543,12 @@ end
 _G.F.setAutoBattleEnabled = function(value)
 	_G.autoBattleEnabled = value and true or false
 
-	local trainerSelected = type(_G.jackAutoBattle) == "table"
-		and _G.jackAutoBattle.Trainer
-		and _G.jackAutoBattle.Trainer ~= "Disabled"
-
-	-- Wild grass only when Auto Battle is on and no Trainer Target is selected.
-	-- Trainer mode uses doTrainerBattle via the always-on trainer tick instead.
+	-- Trainer Assist only. Farm / Auto Encounter stays under the Farm tab.
 	if _G.autoBattleEnabled then
-		_G.F.setAutoEncounterEnabled(not trainerSelected)
 		if _G.jackAutoBattle.Move == "Disabled" then
 			_G.F.jackSetAutoMove("Move 1")
 		end
 	else
-		_G.F.setAutoEncounterEnabled(false)
 		_G.F.jackSetAutoMove("Disabled")
 	end
 	_G.autoMoveOneEnabled = _G.jackAutoBattle.Move ~= "Disabled"
@@ -1573,10 +1556,8 @@ _G.F.setAutoBattleEnabled = function(value)
 	_G.skipDialogueEnabled = _G.autoBattleEnabled
 	_G.denyReassignMoveEnabled = _G.autoBattleEnabled
 	_G.denySwitchRequestEnabled = _G.autoBattleEnabled
-	_G.denyNicknameEnabled = _G.autoBattleEnabled
 	_G.disableShowProgressEnabled = _G.autoBattleEnabled
 
-	if _G.configUi.autoEncounterToggle then _G.F.setToggleUi(_G.configUi.autoEncounterToggle, _G.autoEncounterEnabled) end
 	if _G.configUi.jackMoveDropdown then
 		_G.F.jackSyncMoveDropdown(_G.jackAutoBattle.Move)
 	end
@@ -1584,7 +1565,6 @@ _G.F.setAutoBattleEnabled = function(value)
 	if _G.configUi.skipDialogueToggle then _G.F.setToggleUi(_G.configUi.skipDialogueToggle, _G.skipDialogueEnabled) end
 	if _G.configUi.denyReassignMoveToggle then _G.F.setToggleUi(_G.configUi.denyReassignMoveToggle, _G.denyReassignMoveEnabled) end
 	if _G.configUi.denySwitchRequestToggle then _G.F.setToggleUi(_G.configUi.denySwitchRequestToggle, _G.denySwitchRequestEnabled) end
-	if _G.configUi.denyNicknameToggle then _G.F.setToggleUi(_G.configUi.denyNicknameToggle, _G.denyNicknameEnabled) end
 	if _G.configUi.disableShowProgressToggle then _G.F.setToggleUi(_G.configUi.disableShowProgressToggle, _G.disableShowProgressEnabled) end
 end
 
