@@ -1548,11 +1548,18 @@ task.spawn(function()
 		local now = os.clock()
 
 		if _G.autoHealEnabled and now - (_G.lastAutoHealAt or 0) >= (_G.autoHealDelay or 8) then
-			_G.lastAutoHealAt = now
-			local ok, reason = _G.F.runAutoHealOnce()
-			if not ok and reason and now - lastHealNoticeAt >= 12 then
-				lastHealNoticeAt = now
-				warn("[Auto Heal] " .. tostring(reason))
+			-- Trainer tick owns healing while a Battleable Trainer is selected
+			-- so the UI outdoor heal path cannot teleport mid-rematch.
+			local trainerOwnsHeal = type(_G.F.jackIsTrainerSelected) == "function" and _G.F.jackIsTrainerSelected()
+			if not trainerOwnsHeal then
+				_G.lastAutoHealAt = now
+				local ok, reason = _G.F.runAutoHealOnce()
+				if not ok and reason and now - lastHealNoticeAt >= 12 then
+					lastHealNoticeAt = now
+					warn("[Auto Heal] " .. tostring(reason))
+				end
+			else
+				_G.lastAutoHealAt = now
 			end
 		end
 
