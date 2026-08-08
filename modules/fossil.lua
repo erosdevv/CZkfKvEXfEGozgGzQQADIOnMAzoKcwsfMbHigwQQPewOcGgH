@@ -1900,6 +1900,7 @@ _G.F.collectConfigSnapshot = function()
 		antiAfkEnabled = _G.F.getToggleConfigValue(_G.configUi.antiAfkToggle, _G.antiAfkEnabled),
 		autoHealEnabled = _G.F.getToggleConfigValue(_G.configUi.autoHealToggle, _G.autoHealEnabled),
 		autoHealDelay = _G.autoHealDelay,
+		autoTrainerDelay = _G.autoTrainerDelay,
 		activeRepellentEnabled = _G.F.getToggleConfigValue(_G.configUi.activeRepellentToggle, _G.activeRepellentEnabled),
 		activeRepellentDelay = _G.activeRepellentDelay,
 		skipDialogueEnabled = _G.F.getToggleConfigValue(_G.configUi.skipDialogueToggle, _G.skipDialogueEnabled),
@@ -2150,6 +2151,15 @@ _G.F.applyConfigVariables = function(data)
 	if data.autoHealDelay ~= nil then
 		_G.autoHealDelay = tonumber(data.autoHealDelay) or _G.autoHealDelay
 	end
+	if data.autoTrainerDelay ~= nil then
+		local delay = tonumber(data.autoTrainerDelay)
+		if delay ~= nil then
+			if delay < 0 then
+				delay = 0
+			end
+			_G.autoTrainerDelay = delay
+		end
+	end
 	if data.activeRepellentEnabled ~= nil then
 		_G.activeRepellentEnabled = _G.F.configBool(data.activeRepellentEnabled, false)
 	end
@@ -2284,6 +2294,9 @@ _G.F.syncConfigUiFromVariables = function()
 	end
 	if _G.configUi.autoHealDelay then
 		_G.F.setSliderUi(_G.configUi.autoHealDelay, _G.autoHealDelay)
+	end
+	if _G.configUi.autoTrainerDelay then
+		_G.F.setSliderUi(_G.configUi.autoTrainerDelay, _G.autoTrainerDelay)
 	end
 	if _G.configUi.activeRepellentToggle then
 		_G.F.setToggleUi(_G.configUi.activeRepellentToggle, _G.activeRepellentEnabled)
