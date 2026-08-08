@@ -170,27 +170,27 @@ local ArcadeAutomation = (function()
 
 	local function resolveDiscDropForceFinishTime()
 		local fromUi = readDiscDropForceFinishTimeFromUi()
-		if fromUi and fromUi > 0 then
+		-- Explicit 0 / 0:00 is valid and must not be treated as "cleared".
+		if fromUi ~= nil and fromUi >= 0 then
 			_G.discDropForceFinishTime = math.floor(fromUi)
 			return _G.discDropForceFinishTime
 		end
 
 		local forced = tonumber(_G.discDropForceFinishTime)
-		if forced and forced > 0 then
+		if forced ~= nil and forced >= 0 then
 			return math.floor(forced)
 		end
 
 		return nil
 	end
 
-	-- Never submit 0:00. When a force time is set, submit that exact value
-	-- (what the Finish Time box is for). Otherwise use real elapsed, floored
-	-- up to at least 1 second.
+	-- When a force time is set (including 0), submit that exact value.
+	-- Otherwise use real elapsed, floored up to at least 1 second.
 	local function getDiscDropFinishTime(startedAt)
 		local elapsed = math.max(0, math.floor((os.clock() - startedAt) + 1e-9))
 		local forced = resolveDiscDropForceFinishTime()
-		if forced and forced > 0 then
-			return math.max(1, math.floor(forced))
+		if forced ~= nil then
+			return math.max(0, math.floor(forced))
 		end
 		return math.max(1, elapsed)
 	end
@@ -385,7 +385,7 @@ local ArcadeAutomation = (function()
 	end
 
 	local function submitDiscDropFinish(finishTime)
-		finishTime = math.max(1, math.floor(tonumber(finishTime) or 1))
+		finishTime = math.max(0, math.floor(tonumber(finishTime) or 0))
 
 		-- Prefer Network.get when available — Finish needs a reliable round-trip.
 		local okGet = false
@@ -532,7 +532,7 @@ local ArcadeAutomation = (function()
 		local startMessage = string.format(
 			"Started (stop %s, finish %s)",
 			formatDiscDropNumber(maxScore),
-			forcedAtStart and formatDiscDropTime(forcedAtStart) or "elapsed>=1s"
+			forcedAtStart ~= nil and formatDiscDropTime(forcedAtStart) or "elapsed>=1s"
 		)
 		renderDiscDropStatus(grid, movesMade, startMessage)
 
@@ -663,26 +663,29 @@ local ArcadeAutomation = (function()
 			end
 		})
 
-		local finishDefault = tonumber(_G.discDropForceFinishTime) or 1
-		_G.discDropForceFinishTime = finishDefault
+		local finishDefault = tonumber(_G.discDropForceFinishTime)
+		if finishDefault == nil or finishDefault < 0 then
+			finishDefault = 1
+		end
+		_G.discDropForceFinishTime = math.floor(finishDefault)
 		_G.configUi.discDropFinishTimeBox = tab:AddTextbox({
 			Name = "Finish Time (seconds or m:ss)",
-			Default = tostring(finishDefault),
+			Default = tostring(_G.discDropForceFinishTime),
 			TextDisappear = false,
 			Callback = function(value)
 				local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
 				if text == "" or string.lower(text) == "off" or string.lower(text) == "none" then
-					-- Empty still keeps a 1s floor at submit time; store nil to mean "use elapsed".
+					-- Empty means use real elapsed (still min 1s). Explicit "0" is forced 0:00.
 					_G.discDropForceFinishTime = nil
 					setDiscDropStatus("Finish time cleared (submit real elapsed, min 1s).")
 					return
 				end
 
 				local parsed = parseDiscDropTimeInput(value)
-				if not parsed or parsed < 1 then
+				if parsed == nil or parsed < 0 then
 					_G.OrionLib:MakeNotification({
 						Name = "Auto Disc Drop",
-						Content = "Finish time must be at least 1 second (e.g. 6 or 0:06).",
+						Content = "Finish time must be 0 or greater (e.g. 0, 6, or 0:06).",
 						Time = 4,
 					})
 					return
