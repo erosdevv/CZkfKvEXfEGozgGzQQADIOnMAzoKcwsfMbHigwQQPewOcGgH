@@ -437,6 +437,13 @@ _G.F.jackSetTrainerPhase = function(phase, status)
 	if status ~= nil then
 		rt.lastStatus = status
 	end
+	if phase == "starting" then
+		-- Snapshot leftover BattleGui so post-fight UI cannot fake "in_battle".
+		rt.hadGuiAtStart = _G.F.jackHasBattleGuiInstance() ~= nil
+		rt.sawBattleObject = false
+	elseif phase == "idle" or phase == "cooldown" then
+		rt.hadGuiAtStart = false
+	end
 	local pending = (rt.phase == "starting" or rt.phase == "awaiting_battle")
 	_G.jackTrainerStartPending = pending
 	if pending and (prev ~= "starting" and prev ~= "awaiting_battle") then
@@ -458,12 +465,15 @@ _G.F.jackIsTrainerStartBusy = function()
 	if _G.F.jackGetBattle() then
 		return true
 	end
-	if _G.F.jackHasBattleGuiInstance() then
+
+	local rt = _G.F.jackGetTrainerRuntime()
+	local phase = rt.phase
+	-- Do not treat leftover BattleGui alone as busy — that caused ~10s gaps
+	-- between rematch fights while the previous GUI tore down.
+	if phase == "starting" or phase == "awaiting_battle" or phase == "healing" then
 		return true
 	end
-
-	local phase = _G.F.jackGetTrainerRuntime().phase
-	if phase == "starting" or phase == "awaiting_battle" or phase == "healing" then
+	if phase == "in_battle" then
 		return true
 	end
 
@@ -1519,11 +1529,17 @@ _G.F.jackResolveTrainerTarget = function(battleId)
 end
 
 _G.F.jackBeginTrainerCooldown = function()
-	local delay = tonumber(_G.autoTrainerDelay) or 1.5
+	local delay = tonumber(_G.autoTrainerDelay) or 0
 	if delay < 0 then
 		delay = 0
 	end
 	local rt = _G.F.jackGetTrainerRuntime()
+	-- Default is instant requeue; only enter cooldown when a delay is set.
+	if delay <= 0 then
+		rt.cooldownUntil = 0
+		_G.F.jackSetTrainerPhase("idle", nil)
+		return
+	end
 	rt.cooldownUntil = os.clock() + delay
 	_G.F.jackSetTrainerPhase("cooldown", "cooldown")
 end
@@ -1534,6 +1550,7 @@ _G.F.jackObserveTrainerBattleState = function(trainerSelected)
 	local hasGui = _G.F.jackHasBattleGuiInstance() ~= nil
 
 	if battle then
+		rt.sawBattleObject = true
 		if rt.phase ~= "in_battle" then
 			_G.F.jackSetTrainerPhase("in_battle", "in_battle")
 		end
@@ -1541,22 +1558,32 @@ _G.F.jackObserveTrainerBattleState = function(trainerSelected)
 	end
 
 	if rt.phase == "in_battle" then
-		-- Battle just ended — honor autoTrainerDelay before the next start.
+		-- Brief grace for GUI teardown, then requeue immediately (or after delay).
+		-- Waiting on leftover BattleGui was the main multi-second rematch gap.
+		local age = _G.F.jackTrainerPhaseAge()
+		if hasGui and age < 0.35 then
+			return nil, true
+		end
 		_G.F.jackBeginTrainerCooldown()
 		return nil, false
 	end
 
 	if rt.phase == "awaiting_battle" or rt.phase == "starting" then
 		if hasGui then
-			_G.F.jackSetTrainerPhase("in_battle", "in_battle")
-			return nil, true
+			-- Promote only when GUI is new for this start attempt. Leftover GUI
+			-- from the previous fight must not lock us in fake in_battle.
+			local leftover = rt.hadGuiAtStart == true and rt.sawBattleObject ~= true
+			if not leftover then
+				_G.F.jackSetTrainerPhase("in_battle", "in_battle")
+				return nil, true
+			end
 		end
 		-- Never time out while doTrainerBattle is still yielding on this thread.
 		if _G.jackTrainerStartInFlight then
 			return nil, true
 		end
 		local age = _G.F.jackTrainerPhaseAge()
-		local limit = (rt.phase == "starting") and 12.0 or 10.0
+		local limit = (rt.phase == "starting") and 12.0 or 8.0
 		if age >= limit then
 			_G.F.jackSetTrainerPhase("idle", "start_timeout")
 			_G.F.jackReportTrainerFail("start_timeout")
@@ -1646,7 +1673,7 @@ _G.F.jackRunAutoTrainerTick = function()
 	local menuDisabled = type(menu) == "table" and menu.enabled == false
 	if walkDisabled or menuDisabled then
 		-- Rematch leftover dialogue / post-battle fade often leaves Walk+Menu
-		-- false. Soft-advance chat and only hard-block briefly; after ~1.5s
+		-- false. Soft-advance chat and only hard-block briefly; after ~0.35s
 		-- attempt the start anyway so Auto Trainer does not stall forever.
 		_G.F.jackSoftAdvanceTrainerChat()
 		local gateAt = tonumber(_G.jackTrainerWalkMenuGateAt) or 0
@@ -1654,7 +1681,7 @@ _G.F.jackRunAutoTrainerTick = function()
 			_G.jackTrainerWalkMenuGateAt = os.clock()
 			gateAt = _G.jackTrainerWalkMenuGateAt
 		end
-		if (os.clock() - gateAt) < 1.5 then
+		if (os.clock() - gateAt) < 0.35 then
 			local reason = walkDisabled and "Walk is disabled." or "Menu is disabled."
 			_G.F.jackReportTrainerFail(reason)
 			return false, reason

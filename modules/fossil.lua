@@ -1900,6 +1900,7 @@ _G.F.collectConfigSnapshot = function()
 		antiAfkEnabled = _G.F.getToggleConfigValue(_G.configUi.antiAfkToggle, _G.antiAfkEnabled),
 		autoHealEnabled = _G.F.getToggleConfigValue(_G.configUi.autoHealToggle, _G.autoHealEnabled),
 		autoHealDelay = _G.autoHealDelay,
+		autoTrainerDelay = _G.autoTrainerDelay,
 		activeRepellentEnabled = _G.F.getToggleConfigValue(_G.configUi.activeRepellentToggle, _G.activeRepellentEnabled),
 		activeRepellentDelay = _G.activeRepellentDelay,
 		skipDialogueEnabled = _G.F.getToggleConfigValue(_G.configUi.skipDialogueToggle, _G.skipDialogueEnabled),
