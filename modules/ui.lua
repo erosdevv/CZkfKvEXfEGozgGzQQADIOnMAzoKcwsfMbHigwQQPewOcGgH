@@ -428,7 +428,7 @@ _G.BattleTab:AddButton({
 	end,
 })
 
-_G.BattleTab:AddLabel("Battle is trainers only. Use Farm for wild encounters. Format: #ID Name.")
+_G.BattleTab:AddLabel("Battle is trainers only. Use Farm for wild encounters. Rematch chat is auto-accepted.")
 
 local jackMoveOptions = { "Disabled" }
 for slot = 1, 4 do
