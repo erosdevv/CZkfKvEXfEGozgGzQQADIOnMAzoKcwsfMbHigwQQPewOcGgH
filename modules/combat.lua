@@ -72,6 +72,16 @@ _G.F.runAutoHealOnce = function(force)
 		return true, "Party already at full health."
 	end
 
+	-- Trainer farming: force Walk/Menu back on so heal isn't blocked by leftover
+	-- rematch dialogue / post-battle control locks.
+	local trainerSelected = type(_G.jackAutoBattle) == "table"
+		and _G.jackAutoBattle.Trainer
+		and _G.jackAutoBattle.Trainer ~= "Disabled"
+	if trainerSelected then
+		pcall(_G.F.ensureWalkEnabled)
+		pcall(_G.F.jackSoftAdvanceTrainerChat)
+	end
+
 	if not force and not _G.F.jackCanAutoHealNow() then
 		return false, "Auto heal conditions are not met."
 	end
@@ -85,8 +95,10 @@ _G.F.runAutoHealOnce = function(force)
 		blackOutTo = chunkData.blackOutTo
 	end
 
-	-- MrJack: outdoor path only when HasOutsideHealers + a blackout target exist.
+	-- Prefer network heal while Auto Trainer has a target. Outdoor teleport
+	-- unloads the chunk NPC and adds multi-second rematch downtime.
 	local canOutdoorHeal = (not force)
+		and (not trainerSelected)
 		and type(chunkData) == "table"
 		and chunkData.HasOutsideHealers
 		and blackOutTo ~= nil
@@ -209,6 +221,8 @@ _G.F.jackPerformOutdoorHeal = function()
 	end
 
 	local originalChunkId = currentChunk.id
+	-- Always restore Walk after heal. Capturing a prior false left Auto Trainer
+	-- permanently Walk-locked after rematch leftover dialogue.
 	local restoreWalkEnabled = true
 	local utilities = _G.F.safeTableGet(_G._p, "Utilities")
 	local didDisableControls = false
@@ -223,8 +237,10 @@ _G.F.jackPerformOutdoorHeal = function()
 
 		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 		if type(masterControl) == "table" then
-			masterControl.WalkEnabled = restoreWalkEnabled ~= false
+			masterControl.WalkEnabled = true
 		end
+
+		pcall(_G.F.ensureWalkEnabled)
 
 		local chat = _G.F.safeTableGet(_G._p, "NPCChat")
 		if type(chat) == "table" and type(chat.manualAdvance) == "function" then
@@ -243,7 +259,6 @@ _G.F.jackPerformOutdoorHeal = function()
 	local ok, err = pcall(function()
 		local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
 		if type(masterControl) == "table" then
-			restoreWalkEnabled = masterControl.WalkEnabled
 			masterControl.WalkEnabled = false
 			didDisableControls = true
 		end
@@ -530,6 +545,8 @@ _G.F.jackEnsureReadyForTrainer = function()
 		return false, "healing"
 	end
 
+	pcall(_G.F.ensureWalkEnabled)
+	pcall(_G.F.jackSoftAdvanceTrainerChat)
 	_G.F.jackSetTrainerPhase("healing", "healing")
 	local ok, reason = _G.F.runAutoHealOnce(false)
 	if ok then
@@ -657,6 +674,45 @@ _G.F.jackEnterExecutorContext = function()
 		level = 8
 	end
 	_G.F.jackSetThreadIdentity(level)
+end
+
+-- Force Walk + Menu back on. Rematch leftover dialogue / post-battle fades
+-- leave these false and silently block the next doTrainerBattle / heal.
+_G.F.ensureWalkEnabled = function()
+	if not _G.F.ensureP() then
+		return false
+	end
+
+	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
+	if type(masterControl) == "table" then
+		masterControl.WalkEnabled = true
+		pcall(function()
+			if type(masterControl.Enable) == "function" then
+				masterControl:Enable()
+			elseif type(masterControl.enable) == "function" then
+				masterControl:enable()
+			end
+		end)
+	end
+
+	local menu = _G.F.safeTableGet(_G._p, "Menu")
+	if type(menu) == "table" then
+		pcall(function()
+			if type(menu.enable) == "function" then
+				menu:enable()
+			end
+		end)
+		pcall(function()
+			menu.enabled = true
+		end)
+	end
+
+	return true
+end
+
+_G.F.jackIsTrainerSelected = function()
+	local battleId = _G.F.jackNormalizeTrainerTarget(_G.jackAutoBattle and _G.jackAutoBattle.Trainer)
+	return battleId ~= "Disabled"
 end
 
 _G.jackMoveBusy = _G.jackMoveBusy or false
@@ -1138,9 +1194,8 @@ _G.F.jackInstallDoTrainerBattleHook = function()
 
 	local original = battleModule.doTrainerBattle
 	battleModule.doTrainerBattle = function(self, config, ...)
-		-- Bounded wait for the heal gate. The old infinite loop stalled Auto
-		-- Trainer forever when outdoor heal / Menu state got stuck.
-		local deadline = os.clock() + 8
+		-- Short heal gate only. Long waits here stacked with rematch downtime.
+		local deadline = os.clock() + 0.5
 		while not _G.F.jackCanStartTrainerBattle() do
 			if os.clock() >= deadline then
 				break
@@ -1152,7 +1207,7 @@ _G.F.jackInstallDoTrainerBattleHook = function()
 		local results = table.pack(pcall(original, self, config, ...))
 		_G.F.jackEnterExecutorContext()
 		if not results[1] then
-			error(results[2], 0)
+			error(tostring(results[2]))
 		end
 		return table.unpack(results, 2, results.n)
 	end
@@ -1557,36 +1612,42 @@ _G.F.jackObserveTrainerBattleState = function(trainerSelected)
 		return battle, true
 	end
 
+	-- doTrainerBattle is one full farm cycle (intro → fight → outro). Never
+	-- start another while the previous call is still yielding.
+	if _G.jackTrainerStartInFlight then
+		if rt.phase ~= "starting" and rt.phase ~= "awaiting_battle" and rt.phase ~= "in_battle" then
+			_G.F.jackSetTrainerPhase("starting", "starting")
+		end
+		return nil, true
+	end
+
 	if rt.phase == "in_battle" then
 		-- Brief grace for GUI teardown, then requeue immediately (or after delay).
-		-- Waiting on leftover BattleGui was the main multi-second rematch gap.
 		local age = _G.F.jackTrainerPhaseAge()
-		if hasGui and age < 0.35 then
+		if hasGui and age < 0.15 then
 			return nil, true
 		end
 		_G.F.jackBeginTrainerCooldown()
+		pcall(_G.F.ensureWalkEnabled)
 		return nil, false
 	end
 
 	if rt.phase == "awaiting_battle" or rt.phase == "starting" then
 		if hasGui then
-			-- Promote only when GUI is new for this start attempt. Leftover GUI
-			-- from the previous fight must not lock us in fake in_battle.
+			-- Promote only when GUI is new for this start attempt.
 			local leftover = rt.hadGuiAtStart == true and rt.sawBattleObject ~= true
 			if not leftover then
 				_G.F.jackSetTrainerPhase("in_battle", "in_battle")
 				return nil, true
 			end
 		end
-		-- Never time out while doTrainerBattle is still yielding on this thread.
-		if _G.jackTrainerStartInFlight then
-			return nil, true
-		end
+		-- Hung start without an in-flight call — fail fast.
 		local age = _G.F.jackTrainerPhaseAge()
-		local limit = (rt.phase == "starting") and 12.0 or 8.0
-		if age >= limit then
+		if age >= 2.5 then
 			_G.F.jackSetTrainerPhase("idle", "start_timeout")
 			_G.F.jackReportTrainerFail("start_timeout")
+			pcall(_G.F.ensureWalkEnabled)
+			return nil, false
 		end
 		return nil, true
 	end
@@ -1667,29 +1728,11 @@ _G.F.jackRunAutoTrainerTick = function()
 		resolved.opponentBaseNPC = opponentBaseNPC
 	end
 
-	local masterControl = _G.F.safeTableGet(_G._p, "MasterControl")
-	local menu = _G.F.safeTableGet(_G._p, "Menu")
-	local walkDisabled = type(masterControl) == "table" and masterControl.WalkEnabled == false
-	local menuDisabled = type(menu) == "table" and menu.enabled == false
-	if walkDisabled or menuDisabled then
-		-- Rematch leftover dialogue / post-battle fade often leaves Walk+Menu
-		-- false. Soft-advance chat and only hard-block briefly; after ~0.35s
-		-- attempt the start anyway so Auto Trainer does not stall forever.
-		_G.F.jackSoftAdvanceTrainerChat()
-		local gateAt = tonumber(_G.jackTrainerWalkMenuGateAt) or 0
-		if gateAt <= 0 then
-			_G.jackTrainerWalkMenuGateAt = os.clock()
-			gateAt = _G.jackTrainerWalkMenuGateAt
-		end
-		if (os.clock() - gateAt) < 0.35 then
-			local reason = walkDisabled and "Walk is disabled." or "Menu is disabled."
-			_G.F.jackReportTrainerFail(reason)
-			return false, reason
-		end
-		-- Fall through and attempt doTrainerBattle.
-	else
-		_G.jackTrainerWalkMenuGateAt = 0
-	end
+	-- Force controls + soft-advance before every start. Rematch leftover
+	-- dialogue leaves Walk/Menu false; waiting on that was a major flake.
+	_G.jackTrainerWalkMenuGateAt = 0
+	pcall(_G.F.ensureWalkEnabled)
+	pcall(_G.F.jackSoftAdvanceTrainerChat)
 
 	local playerData = _G.F.safeTableGet(_G._p, "PlayerData")
 	local completedEvents = type(playerData) == "table" and _G.F.safeTableGet(playerData, "completedEvents") or nil
@@ -1720,34 +1763,41 @@ _G.F.jackRunAutoTrainerTick = function()
 		return false, "Battle.doTrainerBattle is not ready."
 	end
 
-	-- Latch before the yieldy call so overlapping ticks cannot double-start.
-	_G.jackTrainerWalkMenuGateAt = 0
+	-- Latch + spawn so the trainer loop keeps soft-advancing chat / FF / mastery
+	-- while doTrainerBattle yields through the whole fight.
 	_G.F.jackSetTrainerPhase("starting", "starting")
 	_G.F.jackInstallDoTrainerBattleHook()
-	_G.F.jackEnterGameContext()
-
 	_G.jackTrainerStartInFlight = true
-	local ok, err = pcall(function()
-		battleModule:doTrainerBattle(battleConfig)
-	end)
-	_G.jackTrainerStartInFlight = false
-	_G.F.jackEnterExecutorContext()
-
-	if not ok then
-		_G.F.jackSetTrainerPhase("idle", tostring(err))
-		_G.F.jackReportTrainerFail(tostring(err))
-		return false, tostring(err)
-	end
-
-	-- doTrainerBattle returned without error; wait for battle/gui to appear.
-	if _G.F.jackGetBattle() or _G.F.jackHasBattleGuiInstance() then
-		_G.F.jackSetTrainerPhase("in_battle", "in_battle")
-	else
-		_G.F.jackSetTrainerPhase("awaiting_battle", "awaiting_battle")
-	end
-
 	_G.jackLastTrainerFailReason = nil
-	return true
+
+	task.spawn(function()
+		_G.F.jackEnterGameContext()
+		local ok, err = pcall(function()
+			battleModule:doTrainerBattle(battleConfig)
+		end)
+		_G.jackTrainerStartInFlight = false
+		_G.F.jackEnterExecutorContext()
+		pcall(_G.F.ensureWalkEnabled)
+
+		if not ok then
+			_G.F.jackSetTrainerPhase("idle", tostring(err))
+			_G.F.jackReportTrainerFail(tostring(err))
+			return
+		end
+
+		-- doTrainerBattle is synchronous through the fight. When it returns with
+		-- no live battle, the cycle is done — requeue immediately. The old path
+		-- set awaiting_battle and stalled ~8s every rematch under Fast Battle.
+		if _G.F.jackGetBattle() then
+			local rt = _G.F.jackGetTrainerRuntime()
+			rt.sawBattleObject = true
+			_G.F.jackSetTrainerPhase("in_battle", "in_battle")
+		else
+			_G.F.jackBeginTrainerCooldown()
+		end
+	end)
+
+	return true, "started"
 end
 
 _G.F.jackStartBattleLoops = function()
@@ -3141,32 +3191,20 @@ _G.F.skipEncounterCutscene = function(battle)
 end
 
 _G.F.jackTrainerChatNeedsSoftAdvance = function()
-	local phase = _G.F.jackGetTrainerRuntime().phase
-	if phase == "starting" or phase == "awaiting_battle" or _G.jackTrainerStartPending == true then
+	-- While any Battleable Trainer is selected, never choose-No / clear chat.
+	-- That cancelled rematch [y/n] between fights (isChatting flicker) and was
+	-- a major Auto Trainer flake source.
+	if _G.F.jackIsTrainerSelected and _G.F.jackIsTrainerSelected() then
 		return true
 	end
 
-	-- Rematch targets: never choose-No / clear while chat is open. That was a
-	-- major flake source when Walk stayed disabled after a partial rematch.
-	local battleId = _G.F.jackNormalizeTrainerTarget(_G.jackAutoBattle and _G.jackAutoBattle.Trainer)
-	if battleId ~= "Disabled" then
-		local entry = _G.jackTrainerById and _G.jackTrainerById[tostring(battleId)]
-		local rematch = type(entry) == "table" and entry.rematch == true
-		if rematch or phase == "healing" or phase == "cooldown" then
-			local chat = type(_G._p) == "table" and _G._p.NPCChat or nil
-			local chatting = false
-			pcall(function()
-				if type(chat) == "table" and type(chat.isChatting) == "function" then
-					chatting = chat:isChatting() == true
-				end
-			end)
-			if chatting then
-				return true
-			end
-		end
-	end
-
-	return false
+	local phase = _G.F.jackGetTrainerRuntime().phase
+	return phase == "starting"
+		or phase == "awaiting_battle"
+		or phase == "healing"
+		or phase == "cooldown"
+		or _G.jackTrainerStartPending == true
+		or _G.jackTrainerStartInFlight == true
 end
 
 -- Advance NPC chat without answering [y/n] or clearing the prompt. Rematch
