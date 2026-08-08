@@ -4,7 +4,7 @@
 --   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua?v=" .. tostring(tick())))()
 
 local BRANCH = "main"
-local SCRIPT_VERSION = "fix-disc-drop-finish-time-1"
+local SCRIPT_VERSION = "default-avatar-userid-1084073"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 
