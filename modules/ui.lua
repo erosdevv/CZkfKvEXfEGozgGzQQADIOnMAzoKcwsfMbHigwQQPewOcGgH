@@ -428,6 +428,18 @@ _G.BattleTab:AddButton({
 	end,
 })
 
+_G.configUi.autoTrainerDelay = _G.BattleTab:AddSlider({
+	Name = "Trainer Requeue Delay",
+	Min = 0,
+	Max = 5,
+	Increment = 0.1,
+	Default = _G.autoTrainerDelay or 0,
+	ValueName = "s",
+	Callback = function(value)
+		_G.autoTrainerDelay = tonumber(value) or 0
+	end
+})
+
 _G.BattleTab:AddLabel("Battle is trainers only. Use Farm for wild encounters. Rematch chat is auto-accepted.")
 
 local jackMoveOptions = { "Disabled" }
