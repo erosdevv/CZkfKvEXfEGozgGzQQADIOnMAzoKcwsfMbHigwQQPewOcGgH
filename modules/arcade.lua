@@ -118,21 +118,81 @@ local ArcadeAutomation = (function()
 		return false
 	end
 
+	-- Game hard-caps at 999,999 and may auto-finish server-side when hit.
+	-- Stop just under that so our DiscDrop_Finish still owns the reported time.
+	local DISC_DROP_SERVER_SCORE_CAP = 999999
+	local DISC_DROP_SAFE_SCORE_CEILING = 999000
+
 	local function getDiscDropMaxScore()
 		local maxScore = tonumber(_G.discDropMaxScore)
 		if maxScore and maxScore > 0 then
-			return math.floor(maxScore)
+			maxScore = math.floor(maxScore)
+			if maxScore >= DISC_DROP_SERVER_SCORE_CAP then
+				return DISC_DROP_SAFE_SCORE_CEILING
+			end
+			return maxScore
 		end
+		return DISC_DROP_SAFE_SCORE_CEILING
+	end
+
+	-- Prefer the live textbox value (Orion sometimes shows typed text without
+	-- firing Callback until enter/focus-lost).
+	local function readDiscDropForceFinishTimeFromUi()
+		local box = _G.configUi and _G.configUi.discDropFinishTimeBox
+		if type(box) ~= "table" then
+			return nil
+		end
+
+		local raw = nil
+		pcall(function()
+			if type(box.Value) == "string" or type(box.Value) == "number" then
+				raw = box.Value
+			elseif type(box.Text) == "string" then
+				raw = box.Text
+			elseif type(box.Get) == "function" then
+				raw = box:Get()
+			elseif type(box.Content) == "table" or type(box.Content) == "userdata" then
+				raw = box.Content.Text
+			end
+		end)
+
+		if raw == nil then
+			return nil
+		end
+
+		local text = string.gsub(tostring(raw or ""), "^%s*(.-)%s*$", "%1")
+		if text == "" or string.lower(text) == "off" or string.lower(text) == "none" then
+			return nil
+		end
+
+		return parseDiscDropTimeInput(text)
+	end
+
+	local function resolveDiscDropForceFinishTime()
+		local fromUi = readDiscDropForceFinishTimeFromUi()
+		if fromUi and fromUi > 0 then
+			_G.discDropForceFinishTime = math.floor(fromUi)
+			return _G.discDropForceFinishTime
+		end
+
+		local forced = tonumber(_G.discDropForceFinishTime)
+		if forced and forced > 0 then
+			return math.floor(forced)
+		end
+
 		return nil
 	end
 
+	-- Never submit 0:00. When a force time is set, submit that exact value
+	-- (what the Finish Time box is for). Otherwise use real elapsed, floored
+	-- up to at least 1 second.
 	local function getDiscDropFinishTime(startedAt)
-		local elapsed = math.max(0, math.floor(os.clock() - startedAt))
-		local forced = tonumber(_G.discDropForceFinishTime)
+		local elapsed = math.max(0, math.floor((os.clock() - startedAt) + 1e-9))
+		local forced = resolveDiscDropForceFinishTime()
 		if forced and forced > 0 then
-			return math.max(elapsed, math.floor(forced))
+			return math.max(1, math.floor(forced))
 		end
-		return elapsed
+		return math.max(1, elapsed)
 	end
 
 	local function refreshDiscDropRecordsLabel()
@@ -452,9 +512,12 @@ local ArcadeAutomation = (function()
 		local movesMade = 0
 		local lastScore = readDiscDropScore(grid)
 		local maxScore = getDiscDropMaxScore()
-		local startMessage = maxScore
-			and string.format("Started (max %s)", formatDiscDropNumber(maxScore))
-			or "Started (no score cap)"
+		local forcedAtStart = resolveDiscDropForceFinishTime()
+		local startMessage = string.format(
+			"Started (stop %s, finish %s)",
+			formatDiscDropNumber(maxScore),
+			forcedAtStart and formatDiscDropTime(forcedAtStart) or "elapsed≥1s"
+		)
 		renderDiscDropStatus(grid, movesMade, startMessage)
 
 		while _G.autoDiscDropEnabled and _G.uiAlive do
@@ -462,7 +525,8 @@ local ArcadeAutomation = (function()
 			if currentScoreCheck < lastScore then
 				currentScoreCheck = lastScore
 			end
-			if maxScore and currentScoreCheck >= maxScore then
+			-- Stop before the server 999,999 auto-finish so our Finish owns the time.
+			if currentScoreCheck >= maxScore or currentScoreCheck >= DISC_DROP_SAFE_SCORE_CEILING then
 				break
 			end
 
@@ -493,8 +557,8 @@ local ArcadeAutomation = (function()
 				lastScore = currentScore
 			end
 
-			if maxScore and currentScore >= maxScore then
-				renderDiscDropStatus(grid, movesMade, "Max score reached")
+			if currentScore >= maxScore or currentScore >= DISC_DROP_SAFE_SCORE_CEILING then
+				renderDiscDropStatus(grid, movesMade, "Score cap reached")
 				break
 			end
 
@@ -503,14 +567,15 @@ local ArcadeAutomation = (function()
 
 		recordDiscDropGameScore(grid)
 		local finishTime = getDiscDropFinishTime(startedAt)
-		networkPost("DiscDrop_Finish", finishTime, true)
+		local submitted, submittedTime, via = submitDiscDropFinish(finishTime)
 		renderDiscDropStatus(
 			grid,
 			movesMade,
 			string.format(
-				"%s (time %s)",
+				"%s (submitted %s%s)",
 				movesMade > 0 and "Finished" or "No moves",
-				formatDiscDropTime(finishTime)
+				formatDiscDropTime(submittedTime or finishTime),
+				submitted and (via and (", " .. via) or "") or ", send failed"
 			)
 		)
 		return movesMade > 0, movesMade > 0 and nil or "No Disc Drop moves were available."
@@ -559,9 +624,9 @@ local ArcadeAutomation = (function()
 			end
 		})
 
-		local maxScoreDefault = getDiscDropMaxScore()
+		local maxScoreDefault = tonumber(_G.discDropMaxScore)
 		_G.configUi.discDropMaxScoreBox = tab:AddTextbox({
-			Name = "Max Score (blank = no cap)",
+			Name = "Max Score (blank = play to ~999k)",
 			Default = maxScoreDefault and tostring(maxScoreDefault) or "",
 			TextDisappear = false,
 			Callback = function(value)
@@ -569,7 +634,7 @@ local ArcadeAutomation = (function()
 				if parsed == false then
 					_G.OrionLib:MakeNotification({
 						Name = "Auto Disc Drop",
-						Content = "Max score must be a positive number (or blank for no cap).",
+						Content = "Max score must be a positive number (or blank for ~999k soft cap).",
 						Time = 4,
 					})
 					return
@@ -577,36 +642,38 @@ local ArcadeAutomation = (function()
 				_G.discDropMaxScore = parsed
 				local message = parsed
 					and ("Max score set to " .. formatDiscDropNumber(parsed))
-					or "Max score cleared (play until no moves)."
+					or "Max score cleared (soft-cap near 999k so Finish time still applies)."
 				setDiscDropStatus(message)
 			end
 		})
 
-		local finishDefault = tonumber(_G.discDropForceFinishTime)
+		local finishDefault = tonumber(_G.discDropForceFinishTime) or 1
+		_G.discDropForceFinishTime = finishDefault
 		_G.configUi.discDropFinishTimeBox = tab:AddTextbox({
 			Name = "Finish Time (seconds or m:ss)",
-			Default = finishDefault and tostring(finishDefault) or "1",
+			Default = tostring(finishDefault),
 			TextDisappear = false,
 			Callback = function(value)
 				local text = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
 				if text == "" or string.lower(text) == "off" or string.lower(text) == "none" then
+					-- Empty still keeps a 1s floor at submit time; store nil to mean "use elapsed".
 					_G.discDropForceFinishTime = nil
-					setDiscDropStatus("Finish time cleared (use real elapsed).")
+					setDiscDropStatus("Finish time cleared (submit real elapsed, min 1s).")
 					return
 				end
 
 				local parsed = parseDiscDropTimeInput(value)
-				if not parsed or parsed < 0 then
+				if not parsed or parsed < 1 then
 					_G.OrionLib:MakeNotification({
 						Name = "Auto Disc Drop",
-						Content = "Finish time must be seconds (90) or m:ss (1:30).",
+						Content = "Finish time must be at least 1 second (e.g. 6 or 0:06).",
 						Time = 4,
 					})
 					return
 				end
 
-				_G.discDropForceFinishTime = parsed
-				setDiscDropStatus("Finish time set to " .. formatDiscDropTime(parsed) .. ".")
+				_G.discDropForceFinishTime = math.floor(parsed)
+				setDiscDropStatus("Finish time set to " .. formatDiscDropTime(parsed) .. " (submitted exactly).")
 			end
 		})
 
