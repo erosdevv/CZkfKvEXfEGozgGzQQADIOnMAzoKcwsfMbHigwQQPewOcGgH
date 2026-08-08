@@ -118,16 +118,18 @@ local ArcadeAutomation = (function()
 		return false
 	end
 
-	-- Game hard-caps at 999,999 and may auto-finish server-side when hit.
-	-- Stop just under that so our DiscDrop_Finish still owns the reported time.
+	-- Game hard-caps at 999,999 and auto-finishes server-side when hit — that
+	-- finish uses time 0:00 and overrides our DiscDrop_Finish. Stop well under
+	-- the cap, and never send a move that is predicted to cross the hard line.
 	local DISC_DROP_SERVER_SCORE_CAP = 999999
-	local DISC_DROP_SAFE_SCORE_CEILING = 999000
+	local DISC_DROP_SAFE_SCORE_CEILING = 900000
+	local DISC_DROP_MOVE_HARD_STOP = 980000
 
 	local function getDiscDropMaxScore()
 		local maxScore = tonumber(_G.discDropMaxScore)
 		if maxScore and maxScore > 0 then
 			maxScore = math.floor(maxScore)
-			if maxScore >= DISC_DROP_SERVER_SCORE_CAP then
+			if maxScore >= DISC_DROP_MOVE_HARD_STOP then
 				return DISC_DROP_SAFE_SCORE_CEILING
 			end
 			return maxScore
@@ -184,11 +186,14 @@ local ArcadeAutomation = (function()
 		return nil
 	end
 
-	-- When a force time is set (including 0), submit that exact value.
-	-- Otherwise use real elapsed, floored up to at least 1 second.
-	local function getDiscDropFinishTime(startedAt)
+	-- latchedForced: finish time captured at NewGame so mid-run UI edits cannot
+	-- accidentally submit 0:00 after a long 9000s farm.
+	local function getDiscDropFinishTime(startedAt, latchedForced)
 		local elapsed = math.max(0, math.floor((os.clock() - startedAt) + 1e-9))
-		local forced = resolveDiscDropForceFinishTime()
+		local forced = latchedForced
+		if forced == nil then
+			forced = resolveDiscDropForceFinishTime()
+		end
 		if forced ~= nil then
 			return math.max(0, math.floor(forced))
 		end
@@ -384,20 +389,35 @@ local ArcadeAutomation = (function()
 		return directNetworkPost(actionName, ...)
 	end
 
-	local function submitDiscDropFinish(finishTime)
+	local function submitDiscDropFinish(finishTime, opts)
+		opts = type(opts) == "table" and opts or {}
 		finishTime = math.max(0, math.floor(tonumber(finishTime) or 0))
 
-		-- Prefer Network.get when available — Finish needs a reliable round-trip.
-		local okGet = false
-		pcall(function()
-			okGet = select(1, networkGet("DiscDrop_Finish", finishTime, true)) == true
-		end)
-		if okGet then
-			return true, finishTime, "get"
+		-- If the run latched a non-zero forced time, never fall through to 0:00.
+		local minForced = tonumber(opts.minForced)
+		if minForced and minForced > 0 and finishTime <= 0 then
+			finishTime = math.floor(minForced)
 		end
 
-		local okPost = networkPost("DiscDrop_Finish", finishTime, true)
-		return okPost == true, finishTime, "post"
+		local lastVia = nil
+		for attempt = 1, 3 do
+			local okGet = false
+			pcall(function()
+				okGet = select(1, networkGet("DiscDrop_Finish", finishTime, true)) == true
+			end)
+			if okGet then
+				return true, finishTime, "get"
+			end
+
+			local okPost = networkPost("DiscDrop_Finish", finishTime, true)
+			if okPost == true then
+				return true, finishTime, "post"
+			end
+			lastVia = "retry"
+			task.wait(0.15)
+		end
+
+		return false, finishTime, lastVia or "failed"
 	end
 
 	local function getDiscDropGridClass()
@@ -446,7 +466,7 @@ local ArcadeAutomation = (function()
 	local function scoreDiscDropMove(grid, move)
 		local clone = cloneDiscDropGrid(grid)
 		if not clone or type(clone.TrySwap) ~= "function" then
-			return -math.huge
+			return -math.huge, nil
 		end
 
 		local beforeScore = readDiscDropScore(clone)
@@ -455,18 +475,20 @@ local ArcadeAutomation = (function()
 		end)
 
 		if not ok or not swapped then
-			return -math.huge
+			return -math.huge, nil
 		end
 
 		local afterScore = readDiscDropScore(clone)
 		local scoreGain = afterScore - beforeScore
 		local combo = math.max(1, readDiscDropCombo(clone))
-		return scoreGain * 1000 + combo + math.random()
+		return scoreGain * 1000 + combo + math.random(), afterScore
 	end
 
-	local function chooseDiscDropMove(grid)
+	-- Pick the best move that will not push us into the server 999,999
+	-- auto-finish (which stamps 0:00 and ignores our Finish time).
+	local function chooseDiscDropMove(grid, stopScore)
 		if type(grid) ~= "table" or type(grid.GetPossibleMoveList) ~= "function" then
-			return nil
+			return nil, nil
 		end
 
 		local ok, moves = pcall(function()
@@ -474,11 +496,18 @@ local ArcadeAutomation = (function()
 		end)
 
 		if not ok or type(moves) ~= "table" then
-			return nil
+			return nil, nil
 		end
+
+		stopScore = tonumber(stopScore) or DISC_DROP_SAFE_SCORE_CEILING
+		local hardStop = math.min(DISC_DROP_MOVE_HARD_STOP, math.max(stopScore, DISC_DROP_SAFE_SCORE_CEILING))
 
 		local bestMove = nil
 		local bestScore = -math.huge
+		local bestAfter = nil
+		local safestMove = nil
+		local safestAfter = nil
+		local safestGain = math.huge
 
 		for index = 1, #moves - 1, 2 do
 			local first = moves[index]
@@ -486,16 +515,28 @@ local ArcadeAutomation = (function()
 
 			if type(first) == "table" and type(second) == "table" then
 				local move = { first.x, first.y, second.x, second.y }
-				local score = scoreDiscDropMove(grid, move)
-
-				if score > bestScore then
-					bestScore = score
-					bestMove = move
+				local rank, afterScore = scoreDiscDropMove(grid, move)
+				if afterScore ~= nil then
+					if afterScore < hardStop and rank > bestScore then
+						bestScore = rank
+						bestMove = move
+						bestAfter = afterScore
+					end
+					-- Track the smallest safe gain in case every "best" move overshoots.
+					local gain = afterScore - readDiscDropScore(grid)
+					if afterScore < hardStop and gain >= 0 and gain < safestGain then
+						safestGain = gain
+						safestMove = move
+						safestAfter = afterScore
+					end
 				end
 			end
 		end
 
-		return bestMove
+		if bestMove then
+			return bestMove, bestAfter
+		end
+		return safestMove, safestAfter
 	end
 
 	local function renderDiscDropStatus(grid, movesMade, message)
@@ -528,7 +569,10 @@ local ArcadeAutomation = (function()
 		local movesMade = 0
 		local lastScore = readDiscDropScore(grid)
 		local maxScore = getDiscDropMaxScore()
+		-- Latch finish time for this run so a mid-run textbox glitch cannot
+		-- turn a 9000s farm into a 0:00 submit.
 		local forcedAtStart = resolveDiscDropForceFinishTime()
+		local stopReason = nil
 		local startMessage = string.format(
 			"Started (stop %s, finish %s)",
 			formatDiscDropNumber(maxScore),
@@ -543,12 +587,33 @@ local ArcadeAutomation = (function()
 			end
 			-- Stop before the server 999,999 auto-finish so our Finish owns the time.
 			if currentScoreCheck >= maxScore or currentScoreCheck >= DISC_DROP_SAFE_SCORE_CEILING then
+				stopReason = "score cap"
+				break
+			end
+			if currentScoreCheck >= DISC_DROP_MOVE_HARD_STOP then
+				stopReason = "hard stop"
 				break
 			end
 
-			local move = chooseDiscDropMove(grid)
+			local move, predictedAfter = chooseDiscDropMove(grid, maxScore)
 			if not move then
+				stopReason = "no safe move"
 				break
+			end
+
+			-- Predicted overshoot: finish now instead of letting the server
+			-- auto-complete at 999,999 with 0:00.
+			if predictedAfter and predictedAfter >= DISC_DROP_MOVE_HARD_STOP then
+				stopReason = "predicted overshoot"
+				break
+			end
+			if predictedAfter and predictedAfter >= maxScore and currentScoreCheck >= math.floor(maxScore * 0.85) then
+				-- Close enough to target — take the finish rather than one more
+				-- high-risk combo that can slam into the server cap.
+				if predictedAfter >= DISC_DROP_SAFE_SCORE_CEILING then
+					stopReason = "near cap"
+					break
+				end
 			end
 
 			local okMove = networkPost("DiscDrop_Move", move[1], move[2], move[3], move[4])
@@ -563,6 +628,7 @@ local ArcadeAutomation = (function()
 			end)
 
 			if not swapped then
+				stopReason = "swap failed"
 				break
 			end
 
@@ -573,7 +639,10 @@ local ArcadeAutomation = (function()
 				lastScore = currentScore
 			end
 
-			if currentScore >= maxScore or currentScore >= DISC_DROP_SAFE_SCORE_CEILING then
+			if currentScore >= maxScore
+				or currentScore >= DISC_DROP_SAFE_SCORE_CEILING
+				or currentScore >= DISC_DROP_MOVE_HARD_STOP then
+				stopReason = "score cap"
 				renderDiscDropStatus(grid, movesMade, "Score cap reached")
 				break
 			end
@@ -582,16 +651,24 @@ local ArcadeAutomation = (function()
 		end
 
 		recordDiscDropGameScore(grid)
-		local finishTime = getDiscDropFinishTime(startedAt)
-		local submitted, submittedTime, via = submitDiscDropFinish(finishTime)
+		local finishTime = getDiscDropFinishTime(startedAt, forcedAtStart)
+		local submitted, submittedTime, via = submitDiscDropFinish(finishTime, {
+			minForced = forcedAtStart,
+		})
+		local finalScore = readDiscDropScore(grid)
+		local warnOvershoot = finalScore >= DISC_DROP_MOVE_HARD_STOP
+			and " — score near server cap; 0:00 risk"
+			or ""
 		renderDiscDropStatus(
 			grid,
 			movesMade,
 			string.format(
-				"%s (submitted %s%s)",
+				"%s (submitted %s%s%s%s)",
 				movesMade > 0 and "Finished" or "No moves",
 				formatDiscDropTime(submittedTime or finishTime),
-				submitted and (via and (", " .. via) or "") or ", send failed"
+				submitted and (via and (", " .. via) or "") or ", send failed",
+				stopReason and (", " .. stopReason) or "",
+				warnOvershoot
 			)
 		)
 		return movesMade > 0, movesMade > 0 and nil or "No Disc Drop moves were available."
@@ -642,7 +719,7 @@ local ArcadeAutomation = (function()
 
 		local maxScoreDefault = tonumber(_G.discDropMaxScore)
 		_G.configUi.discDropMaxScoreBox = tab:AddTextbox({
-			Name = "Max Score (blank = play to ~999k)",
+			Name = "Max Score (blank = play to ~900k)",
 			Default = maxScoreDefault and tostring(maxScoreDefault) or "",
 			TextDisappear = false,
 			Callback = function(value)
@@ -650,7 +727,7 @@ local ArcadeAutomation = (function()
 				if parsed == false then
 					_G.OrionLib:MakeNotification({
 						Name = "Auto Disc Drop",
-						Content = "Max score must be a positive number (or blank for ~999k soft cap).",
+						Content = "Max score must be a positive number (or blank for ~900k soft cap).",
 						Time = 4,
 					})
 					return
@@ -658,7 +735,7 @@ local ArcadeAutomation = (function()
 				_G.discDropMaxScore = parsed
 				local message = parsed
 					and ("Max score set to " .. formatDiscDropNumber(parsed))
-					or "Max score cleared (soft-cap near 999k so Finish time still applies)."
+					or "Max score cleared (soft-cap ~900k; never hit 999,999 or time becomes 0:00)."
 				setDiscDropStatus(message)
 			end
 		})
