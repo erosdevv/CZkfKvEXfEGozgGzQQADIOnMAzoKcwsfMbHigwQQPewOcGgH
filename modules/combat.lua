@@ -576,23 +576,77 @@ _G.F.jackReportTrainerFail = function(reason)
 	end
 
 	_G.jackLastTrainerFailNoticeAt = now
-	pcall(function()
-		if _G.OrionLib and type(_G.OrionLib.MakeNotification) == "function" then
-			_G.OrionLib:MakeNotification({
-				Name = "Auto Trainer",
-				Content = pretty,
-				Time = 4,
-			})
-		end
+	task.defer(function()
+		pcall(function()
+			_G.F.jackEnterExecutorContext()
+			if _G.OrionLib and type(_G.OrionLib.MakeNotification) == "function" then
+				_G.OrionLib:MakeNotification({
+					Name = "Auto Trainer",
+					Content = pretty,
+					Time = 4,
+				})
+			end
+		end)
 	end)
 end
 
-_G.F.jackEnterGameContext = function()
-	if type(setthreadcontext) == "function" then
-		pcall(setthreadcontext, 2)
-	elseif type(syn) == "table" and type(syn.set_thread_identity) == "function" then
-		pcall(syn.set_thread_identity, 2)
+_G.F.jackGetThreadIdentity = function()
+	local identity = nil
+	pcall(function()
+		if type(getthreadidentity) == "function" then
+			identity = getthreadidentity()
+		elseif type(get_thread_identity) == "function" then
+			identity = get_thread_identity()
+		elseif type(getthreadcontext) == "function" then
+			identity = getthreadcontext()
+		elseif type(syn) == "table" and type(syn.get_thread_identity) == "function" then
+			identity = syn.get_thread_identity()
+		end
+	end)
+	return tonumber(identity)
+end
+
+_G.F.jackSetThreadIdentity = function(level)
+	level = tonumber(level)
+	if not level then
+		return false
 	end
+	local ok = false
+	if type(setthreadidentity) == "function" then
+		ok = pcall(setthreadidentity, level) or ok
+	end
+	if type(set_thread_identity) == "function" then
+		ok = pcall(set_thread_identity, level) or ok
+	end
+	if type(setthreadcontext) == "function" then
+		ok = pcall(setthreadcontext, level) or ok
+	end
+	if type(syn) == "table" and type(syn.set_thread_identity) == "function" then
+		ok = pcall(syn.set_thread_identity, level) or ok
+	end
+	return ok
+end
+
+-- Capture the executor identity once while still on the load thread.
+do
+	local current = _G.F.jackGetThreadIdentity()
+	if current and current >= 3 then
+		_G.jackExecutorThreadIdentity = current
+	else
+		_G.jackExecutorThreadIdentity = _G.jackExecutorThreadIdentity or 8
+	end
+end
+
+_G.F.jackEnterGameContext = function()
+	_G.F.jackSetThreadIdentity(2)
+end
+
+_G.F.jackEnterExecutorContext = function()
+	local level = tonumber(_G.jackExecutorThreadIdentity) or 8
+	if level < 3 then
+		level = 8
+	end
+	_G.F.jackSetThreadIdentity(level)
 end
 
 _G.jackMoveBusy = _G.jackMoveBusy or false
@@ -1085,7 +1139,12 @@ _G.F.jackInstallDoTrainerBattleHook = function()
 		end
 
 		_G.F.jackEnterGameContext()
-		return original(self, config, ...)
+		local results = table.pack(pcall(original, self, config, ...))
+		_G.F.jackEnterExecutorContext()
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
 	end
 
 	battleModule.__jackDoTrainerBattleHooked = true
@@ -1645,6 +1704,7 @@ _G.F.jackRunAutoTrainerTick = function()
 		battleModule:doTrainerBattle(battleConfig)
 	end)
 	_G.jackTrainerStartInFlight = false
+	_G.F.jackEnterExecutorContext()
 
 	if not ok then
 		_G.F.jackSetTrainerPhase("idle", tostring(err))
@@ -1740,6 +1800,9 @@ _G.F.jackStartBattleLoops = function()
 					_G.F.clickThroughNpcChat()
 				end)
 			end
+
+			-- Keep the loop on executor identity so Orion UI / notifications work.
+			pcall(_G.F.jackEnterExecutorContext)
 
 			task.wait(0.1)
 		end
