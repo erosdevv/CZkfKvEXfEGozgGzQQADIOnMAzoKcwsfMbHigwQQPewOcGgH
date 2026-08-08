@@ -384,6 +384,22 @@ local ArcadeAutomation = (function()
 		return directNetworkPost(actionName, ...)
 	end
 
+	local function submitDiscDropFinish(finishTime)
+		finishTime = math.max(1, math.floor(tonumber(finishTime) or 1))
+
+		-- Prefer Network.get when available — Finish needs a reliable round-trip.
+		local okGet = false
+		pcall(function()
+			okGet = select(1, networkGet("DiscDrop_Finish", finishTime, true)) == true
+		end)
+		if okGet then
+			return true, finishTime, "get"
+		end
+
+		local okPost = networkPost("DiscDrop_Finish", finishTime, true)
+		return okPost == true, finishTime, "post"
+	end
+
 	local function getDiscDropGridClass()
 		ensureP()
 
@@ -516,7 +532,7 @@ local ArcadeAutomation = (function()
 		local startMessage = string.format(
 			"Started (stop %s, finish %s)",
 			formatDiscDropNumber(maxScore),
-			forcedAtStart and formatDiscDropTime(forcedAtStart) or "elapsed≥1s"
+			forcedAtStart and formatDiscDropTime(forcedAtStart) or "elapsed>=1s"
 		)
 		renderDiscDropStatus(grid, movesMade, startMessage)
 
