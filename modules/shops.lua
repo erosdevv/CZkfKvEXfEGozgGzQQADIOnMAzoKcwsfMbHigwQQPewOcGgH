@@ -589,6 +589,119 @@ _G.F.purchaseMaxArcadeBoonarys = function()
 	return false, tostring(buyResult or maxResult or "buyItem failed.")
 end
 
+-- Arcade Mystery Metals + Boonary variants (_mm13–_mm19, boonaryb, boonaryf).
+_G.ARCADE_MM_SHOP_ITEMS = {
+	"_mm13",
+	"_mm14",
+	"_mm15",
+	"_mm16",
+	"_mm17",
+	"_mm18",
+	"_mm19",
+	"boonaryb",
+	"boonaryf",
+}
+
+_G.F.purchaseArcadeShopItemMax = function(itemId)
+	itemId = tostring(itemId or "")
+	if itemId == "" then
+		return false, "Missing item id."
+	end
+
+	if type(_G._p) ~= "table" then
+		_G._p = _G.F.findP()
+	end
+
+	local ok, maxResult = _G.F.pdsGetAction("maxBuy", itemId)
+	if not ok and maxResult == nil then
+		local reqOk, reqValue = _G.F.rallyPdsReq("maxBuy", itemId)
+		if reqOk then
+			ok = true
+			maxResult = reqValue
+		end
+	end
+
+	if type(maxResult) == "string" then
+		return false, _G.F.getBoonaryMaxBuyErrorMessage(maxResult)
+	end
+
+	if maxResult == true then
+		return true, 1
+	end
+
+	local quantity = 1
+	if type(maxResult) == "number" and maxResult > 0 then
+		quantity = math.floor(maxResult)
+	end
+
+	local function buySucceeded(result)
+		if result == false then
+			return false
+		end
+		if type(result) == "string" then
+			return false
+		end
+		return true
+	end
+
+	local buyOk, buyResult = _G.F.pdsGetAction("buyItem", itemId, quantity)
+	if buyOk and buySucceeded(buyResult) then
+		return true, quantity
+	end
+
+	local reqOk, reqValue = _G.F.rallyPdsReq("buyItem", itemId, quantity)
+	if reqOk and buySucceeded(reqValue) then
+		return true, quantity
+	end
+
+	-- Some RemoteSpy dumps call buyItem(id) with no quantity.
+	local bareOk, bareResult = _G.F.pdsGetAction("buyItem", itemId)
+	if bareOk and buySucceeded(bareResult) then
+		return true, 1
+	end
+
+	if type(buyResult) == "string" then
+		return false, _G.F.getBoonaryMaxBuyErrorMessage(buyResult)
+	end
+	if type(reqValue) == "string" then
+		return false, _G.F.getBoonaryMaxBuyErrorMessage(reqValue)
+	end
+	if type(bareResult) == "string" then
+		return false, _G.F.getBoonaryMaxBuyErrorMessage(bareResult)
+	end
+
+	return false, tostring(buyResult or reqValue or bareResult or "buyItem failed.")
+end
+
+_G.F.purchaseAllArcadeMysteryMetals = function()
+	local items = _G.ARCADE_MM_SHOP_ITEMS or {}
+	local purchased = 0
+	local skipped = 0
+	local failures = {}
+
+	for _, itemId in ipairs(items) do
+		local ok, result = _G.F.purchaseArcadeShopItemMax(itemId)
+		if ok then
+			purchased = purchased + 1
+		else
+			skipped = skipped + 1
+			table.insert(failures, tostring(itemId) .. ": " .. tostring(result))
+		end
+		task.wait(0.15)
+	end
+
+	if purchased <= 0 then
+		local detail = #failures > 0 and failures[1] or "No arcade MM purchases succeeded."
+		return false, detail
+	end
+
+	local summary = string.format("Bought %d/%d arcade MM item(s).", purchased, #items)
+	if skipped > 0 then
+		summary = summary .. " " .. tostring(skipped) .. " skipped."
+	end
+	return true, summary
+end
+
 _G.F.getBoonaryMonsterName = function(monster)
 	if type(monster) ~= "table" then
 		return ""

@@ -4,7 +4,7 @@
 --   loadstring(game:HttpGet("https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/main/main.lua?v=" .. tostring(tick())))()
 
 local BRANCH = "main"
-local SCRIPT_VERSION = "disc-drop-avoid-server-zero-time-1"
+local SCRIPT_VERSION = "arcade-buy-all-mm-1"
 local REPO   = "https://raw.githubusercontent.com/erosdevv/CZkfKvEXfEGozgGzQQADIOnMAzoKcwsfMbHigwQQPewOcGgH/" .. BRANCH
 local ENV    = (getgenv and getgenv()) or _G
 

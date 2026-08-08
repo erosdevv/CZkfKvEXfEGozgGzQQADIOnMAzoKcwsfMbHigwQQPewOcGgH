@@ -1065,6 +1065,25 @@ task.defer(function()
 end)
 
 
+_G.ArcadeTab:AddSection({ Name = "Arcade Shop" })
+
+_G.ArcadeTab:AddButton({
+	Name = "Buy All Arcade MM",
+	Icon = "shopping-cart",
+	Callback = function()
+		task.spawn(function()
+			local ok, reason = _G.F.purchaseAllArcadeMysteryMetals()
+			_G.OrionLib:MakeNotification({
+				Name = "Arcade MM",
+				Content = ok and tostring(reason) or tostring(reason),
+				Time = ok and 4 or 6,
+			})
+		end)
+	end
+})
+
+_G.ArcadeTab:AddLabel("Buys max of _mm13–_mm19, boonaryb, and boonaryf via PDS buyItem.")
+
 _G.ArcadeTab:AddSection({ Name = "Disc Drop" })
 do
 	local arcade = _G.ArcadeAutomation or (getgenv and getgenv().ArcadeAutomation)
